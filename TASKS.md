@@ -12,10 +12,6 @@
       Accept: `scripts/discord_bridge.py poll|once` POSTs each new outbox record to a Discord incoming webhook, and `send` pushes a Discord-sourced post into `Inbox.lua` for the addon to apply on `/reload`; the webhook URL is read from `$GUILDHALL_DISCORD_WEBHOOK` (or `--webhook`) and is never committed. Live: a board post appears in the channel, and a `send` appears on the board after `/reload`. A unit test covers the webhook POST and the record shape against a mocked HTTP layer. Full gate green.
       Touches: `scripts/discord_bridge.py`, `tests/`, `TASKS.md`, `CHANGELOG.md`   Depends: T-023   Gated: none
 
-- [ ] T-066 — API index: load documentation files that use `Enum.*Meta`
-      Why: `LFGConstantsDocumentation.lua` reads `Enum.LFGRoleMeta.NumValues`; the Ketho `LuaEnum.lua` carries no `…Meta` tables, so the file fails on every sync and the index loses `LFGRoles`, `LFG_ROLE_NO_ROLE` and `LFG_ROLE_ANY` (warning present since at least build 70888, `docs/gate/` transcripts).
-      Accept: `wow_api sync` against build 71091 reports zero documentation warnings; `wow_api lookup LFGRoles` and `LFG_ROLE_ANY` are found; a hermetic test feeds a documentation file reading `Enum.XMeta.NumValues` and fails against the pre-change code; full gate green.
-      Touches: `src/wow_addon_forge/apidocs.py`, `tests/test_apidocs.py`, `CHANGELOG.md`, `TASKS.md`   Depends: none   Gated: none
 - [ ] T-067 — API index: record the resource lists' own build
       Why: The index is labelled with the Gethe build (71091 on 2026-11-24) while its global API, event, enum and FrameXML lists come from Ketho/BlizzardInterfaceResources at an older build (70938), and nothing says so.
       Accept: `wow_api status` and `sync` name the resource lists' build (or say it is unknown) and add a warning when it differs from the documentation build; hermetic tests cover the equal, different and unknown cases; full gate green.
@@ -92,6 +88,10 @@
 ## Dropped
 
 ## Done
+- [x] T-066 — API index: load documentation files that use `Enum.*Meta` (2026-11-24, this commit)
+      Why: `LFGConstantsDocumentation.lua` reads `Enum.LFGRoleMeta.NumValues`; the Ketho `LuaEnum.lua` carries no `…Meta` tables, so the file fails on every sync and the index loses `LFGRoles`, `LFG_ROLE_NO_ROLE` and `LFG_ROLE_ANY` (warning present since at least build 70888, `docs/gate/` transcripts).
+      Accept: `wow_api sync` against build 71091 reports zero documentation warnings; `wow_api lookup LFGRoles` is found and `wow_api lookup Constants.LFG_ROLEConstants` shows `LFG_ROLE_ANY` and `LFG_ROLE_NO_ROLE` (corrected 2026-11-24: they are values of that table, goose-deuce.md 2026-11-24 "T-066 Accept named LFG_ROLE_ANY as a lookup name"); a hermetic test feeds a documentation file reading `Enum.XMeta.NumValues` and fails against the pre-change code; full gate green.
+      Touches: `src/wow_addon_forge/apidocs.py`, `tests/test_apidocs.py`, `CHANGELOG.md`, `TASKS.md`   Depends: none   Gated: none
 - [x] T-065 — Headless: hand-written unit calls honour the index's secret returns (2026-11-24, this commit)
       Why: The 1.60.1.71091 index marks `UnitName`, `UnitFullName`, `UnitGUID` and `UnitIsUnit` as secret-returning, but the simulator's hand-written versions ignore that, so `issecretvalue(UnitName("player"))` is false under every restriction and no test reaches the addons' secret-name fallback (found in the 2026-11-24 content review).
       Accept: Under an active restriction, a default `World` client returns secret values from those four calls and plain values once the restriction lifts; the rule is the same one the generated stubs use (an index entry with secret returns, any active restriction), so an index entry without secret returns keeps a hand-written call plain; `minimal_api_index` carries the four entries' secret metadata from build 71091; the new tests fail against the pre-change code; Guildhall and the blocks still pass `wow_check` and their Lua tests; full gate green, mypy clean for win32, linux and darwin.

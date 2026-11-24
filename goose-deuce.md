@@ -123,6 +123,14 @@ tag, choose the owing one.
 <!-- Real entries accumulate below, NEWEST AT THE TOP. The top entries are
      session-start required reading (count: AGENTS.md → Session ritual). -->
 
+## 2026-11-24 — T-066 Accept named LFG_ROLE_ANY as a lookup name  [approach]
+- Task: T-066
+- What: The Accept said `wow_api lookup LFG_ROLE_ANY` is found. `LFG_ROLE_ANY` is a value inside the documented table `Constants.LFG_ROLEConstants`, not an entry of its own, so the check is `wow_api lookup Constants.LFG_ROLEConstants` showing `LFG_ROLE_ANY: 3` and `LFG_ROLE_NO_ROLE: -1`. The Meta tables are derived from `Enum.X` (count, min, max of its numeric values) rather than hard-coded for LFGRole.
+- Why: The index stores Constants members as a table's `values`, the same as every other Constants table; the wrong name was in the task text, not the index. Deriving covers any future `Enum.*Meta` read, not only LFGRole.
+- Where: `TASKS.md` (T-066 Accept); `src/wow_addon_forge/apidocs.py` (`_ENUM_META_CHUNK`).
+- Plan: T-066 Accept as written → corrected in the same commit. docs/PLAN.md not falsified.
+- Commit(s): this commit
+
 ## 2026-11-24 — T-062 picked before its dependency T-061 closed  [process]
 - Task: T-062 / T-061
 - What: T-062 (`Depends: T-061`) was claimed and closed while T-061 is still `[~]`. That breaks PICK's rule that every dependency is `[x]` and the one-open-task rule. The symlink half of the regression test skips on an account that cannot create symlinks (Windows without Developer Mode or admin); the task said "for a symlink on every OS". On such an account the junction test covers the same path.

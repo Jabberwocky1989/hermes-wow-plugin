@@ -73,6 +73,50 @@ APIDocumentation = {
 return collector
 """
 
+# [2026-11-24 T-066] Documentation files read companion Enum.XMeta tables that exist only
+# in the running client: LFGConstantsDocumentation.lua sets LFG_ROLE_ANY =
+# Enum.LFGRoleMeta.NumValues. MinValue and MaxValue are derived as well; that the client's
+# Meta tables carry those two fields is assumed from their names, not observed.
+# Ketho's LuaEnum.lua does not write the Meta tables, so that file failed on every sync
+# and the index lost LFGRoles, LFG_ROLE_NO_ROLE and LFG_ROLE_ANY. This __index derives
+# XMeta from Enum.X on first read. It is installed after Enum is converted to Python and
+# never stores into Enum, so the derived tables never become enum entries. NumValues is
+# the count of numeric values: Ellypse's IntelliJ WoW API quirks file pins
+# Enum.LFGRoleMeta.NumValues = 3, which the three LFGRole values give.
+_ENUM_META_CHUNK = """
+local enum = Enum
+if type(enum) ~= "table" or getmetatable(enum) ~= nil then
+    return false
+end
+local derived = {}
+setmetatable(enum, {
+    __index = function(_, key)
+        if type(key) ~= "string" then
+            return nil
+        end
+        if derived[key] ~= nil then
+            return derived[key]
+        end
+        local base = string.match(key, "^(.+)Meta$")
+        local values = base and rawget(enum, base)
+        if type(values) ~= "table" then
+            return nil
+        end
+        local count, low, high = 0, nil, nil
+        for _, value in pairs(values) do
+            if type(value) == "number" then
+                count = count + 1
+                if low == nil or value < low then low = value end
+                if high == nil or value > high then high = value end
+            end
+        end
+        derived[key] = { NumValues = count, MinValue = low, MaxValue = high }
+        return derived[key]
+    end,
+})
+return true
+"""
+
 
 class ApiIndexError(Exception):
     """Raised for every caller-visible API-index failure, with a stable code and a fix hint.
@@ -1014,6 +1058,17 @@ def _run_lua_enum(runtime: Any, bundle: SourceBundle, warnings: list[str]) -> tu
     except ValueError as exc:
         warnings.append(f"LuaEnum.lua: {exc}")
         return None, None
+    # [2026-11-24 T-066] Only after the conversion above: see _ENUM_META_CHUNK.
+    try:
+        installed = luavm.run_chunk_value(runtime, _ENUM_META_CHUNK, "apidocs-enum-meta.lua")
+    except luavm.LuaChunkError as exc:
+        warnings.append(f"apidocs-enum-meta.lua: {exc.phase}: {exc.message}")
+    else:
+        if installed is not True:
+            warnings.append(
+                "apidocs-enum-meta.lua: Enum already has a metatable; Enum.*Meta tables "
+                "are not derived, so documentation files that read them may fail."
+            )
     return enum_global, constants_global
 
 

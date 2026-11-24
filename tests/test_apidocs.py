@@ -840,3 +840,71 @@ def test_za_export_toc_refuses_escaping_file_names() -> None:
     assert bundle is not None
     assert sorted(bundle.documentation) == ["ForgeExportDocumentation.lua"]
     assert any("Evil.lua" in warning for warning in bundle.warnings)
+
+
+# [2026-11-24 T-066] A Constants table that reads Enum.XMeta while it is built, the way
+# the live LFGConstantsDocumentation.lua reads Enum.LFGRoleMeta.NumValues.
+_META_READING_DOC = """
+APIDocumentation:AddDocumentationTable({
+    Name = "ForgeMetaConstants",
+    Tables = {
+        {
+            Name = "FORGE_ASPECTConstants",
+            Type = "Constants",
+            Values = {
+                { Name = "FORGE_ASPECT_COUNT", Type = "number",
+                  Value = Enum.ForgeAspectMeta.NumValues },
+                { Name = "FORGE_ASPECT_LOW", Type = "number",
+                  Value = Enum.ForgeAspectMeta.MinValue },
+                { Name = "FORGE_ASPECT_HIGH", Type = "number",
+                  Value = Enum.ForgeAspectMeta.MaxValue },
+            },
+        },
+    },
+})
+"""
+
+
+def test_zc_documentation_reading_enum_meta_tables_loads() -> None:
+    """ZC: Enum.XMeta is derived from Enum.X, so a Meta-reading file indexes cleanly."""
+    bundle = fixture_bundle()
+    del bundle.documentation["BrokenDocumentation.lua"]
+    bundle.documentation["ForgeMetaConstantsDocumentation.lua"] = _META_READING_DOC
+    data = built_data(bundle)
+    assert data["warnings"] == []
+    constants = entry(data, "table", "Constants.FORGE_ASPECTConstants")
+    # Enum.ForgeAspect is { Text = 1, Alpha = 2 } in the fixture LuaEnum.lua.
+    assert constants["values"] == {
+        "FORGE_ASPECT_COUNT": 2,
+        "FORGE_ASPECT_LOW": 1,
+        "FORGE_ASPECT_HIGH": 2,
+    }
+    # Derived Meta tables are lookups for documentation files, never enum entries.
+    assert "Enum.ForgeAspectMeta" not in data["entries"]["enum"]
+
+
+def test_zd_enum_meta_for_a_missing_enum_still_fails_loudly() -> None:
+    """ZD: XMeta is never invented without an Enum.X; the file fails with a warning."""
+    bundle = fixture_bundle()
+    del bundle.documentation["BrokenDocumentation.lua"]
+    bundle.documentation["ForgeMetaConstantsDocumentation.lua"] = _META_READING_DOC.replace(
+        "ForgeAspectMeta", "ForgeNoSuchEnumMeta"
+    )
+    data = built_data(bundle)
+    assert any(
+        warning.startswith("ForgeMetaConstantsDocumentation.lua: runtime:")
+        and "ForgeNoSuchEnumMeta" in warning
+        for warning in data["warnings"]
+    )
+
+
+def test_ze_enum_with_its_own_metatable_is_left_alone_and_warned() -> None:
+    """ZE: an Enum that already has a metatable is not touched, and the build says so."""
+    bundle = fixture_bundle()
+    del bundle.documentation["BrokenDocumentation.lua"]
+    bundle.resources["LuaEnum.lua"] = bundle.resources["LuaEnum.lua"] + "setmetatable(Enum, {})\n"
+    data = built_data(bundle)
+    assert any(
+        warning.startswith("apidocs-enum-meta.lua: Enum already has a metatable")
+        for warning in data["warnings"]
+    )
