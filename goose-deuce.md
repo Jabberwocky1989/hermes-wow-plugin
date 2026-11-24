@@ -123,6 +123,14 @@ tag, choose the owing one.
 <!-- Real entries accumulate below, NEWEST AT THE TOP. The top entries are
      session-start required reading (count: AGENTS.md → Session ritual). -->
 
+## 2026-11-24 — T-073 load rules for Bootstrap, LoadIntoEnvironment and locale variables  [decision]
+- Task: T-073 / T-074
+- What: `[Bootstrap]` never excludes a file (loaded and checked like any other); `[LoadIntoEnvironment Secure]` excludes it; `[RegionalTextLocale]` takes the same value as `[TextLocale]` when a locale is given (right for an NA enUS client); a static check widens locale variables to the 11 client locales (13 for RegionalTextLocale, adding enGB and ptPT) and accepts a line when any variant exists. Directive-bearing `##` lines drop their directives and are ignored when the conditions exclude Forever. This closes the "Not covered" list in the entry "Inline TOC conditions and Windows-reserved names found reading the live install" except one new finding: the wiki says a repeated `##` key uses the LAST value, while `parse_toc` keeps the first (T-003's unverified choice); filed as T-074.
+- Why: The wiki gives Bootstrap only as "restricts to the bootstrap process for LoadOnDemand addons", which the headless loader does not model; loading it errs toward checking more code. Secure is Blizzard-only per the wiki. None of this is verified in game; the in-game tasks (T-036, T-063) are where it would be.
+- Where: `src/wow_addon_forge/tocfile.py` (`file_skip_reason`, `expand_toc_variables`, `toc_path_variants`, `parse_toc`); `TASKS.md`.
+- Plan: T-073 Accept ("a stated load rule") → stated here and in the docstrings. docs/PLAN.md not falsified.
+- Commit(s): this commit
+
 ## 2026-11-24 — T-067's "no build in its files" was false; T-069 dropped  [process]
 - Task: T-071 (corrects T-067; drops T-069)
 - What: T-067 shipped the statement that Ketho/BlizzardInterfaceResources "publishes no build number in its files" (sync text, `describe_resource_lists` docstring, the goose-deuce entry "T-067 says the resource build is unknown instead of comparing it", and T-069's Why). Its README.md, on the already-allowed `raw.githubusercontent.com`, carries `GetBuildInfo() => "1.60.1", "70938", …` and changes in every build commit; a cold audit found it. T-071 reads the build from the README and warns when it differs from the documentation build, which is T-067's original Accept. T-067's test `test_zf_…build_is_unknown` pinned the false text and was replaced by three stronger tests (equal, different, unreadable or unparsable). T-069 (allow `api.github.com`) is dropped: the build is readable without a second host.

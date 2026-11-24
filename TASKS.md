@@ -11,12 +11,10 @@
       Why: The bridge contract (SPEC-PLUGIN §7) moves records through files only; the demo's closing beat needs a real Discord channel so the round trip is visible (SPEC-GUILDHALL §10).
       Accept: `scripts/discord_bridge.py poll|once` POSTs each new outbox record to a Discord incoming webhook, and `send` pushes a Discord-sourced post into `Inbox.lua` for the addon to apply on `/reload`; the webhook URL is read from `$GUILDHALL_DISCORD_WEBHOOK` (or `--webhook`) and is never committed. Live: a board post appears in the channel, and a `send` appears on the board after `/reload`. A unit test covers the webhook POST and the record shape against a mocked HTTP layer. Full gate green.
       Touches: `scripts/discord_bridge.py`, `tests/`, `TASKS.md`, `CHANGELOG.md`   Depends: T-023   Gated: none
-
-
-- [ ] T-073 — TOC: the rest of the inline syntax the wiki documents
-      Why: `parse_toc` keeps `[LoadIntoEnvironment …]`, `[Bootstrap]` and the path variables `[Family]`, `[Game]`, `[TextLocale]`, `[RegionalTextLocale]` as part of the file name, so `wow_check` reports real files as missing (an error); inline directives on `##` lines stay inside the header value; a line holding only a directive vanishes without a finding (warcraft.wiki.gg "TOC format", read 2026-11-24; goose-deuce.md 2026-11-24 T-064 entry listed some as not covered with no board item).
-      Accept: `LoadIntoEnvironment` and `Bootstrap` are known directives with a stated load rule; `[Family]` and `[Game]` expand to `Mainline` and `Camelot` (Ketho's README dump of the Forever client: `TOC [Family] => "Mainline"`, `TOC [Game] => "Camelot"`); `[TextLocale]` and `[RegionalTextLocale]` expand to the headless locale when loading, and lint accepts the line when a file exists for at least one client locale; directives on `##` lines are stripped from the value and kept; a directive-only line is a lint warning; tests fail against the pre-change code; full gate green.
-      Touches: `src/wow_addon_forge/tocfile.py`, `src/wow_addon_forge/check.py`, `src/wow_addon_forge/headless/runtime.py`, `tests/test_tocfile.py`, `tests/test_headless.py`, `tests/test_check.py`, `CHANGELOG.md`, `TASKS.md`   Depends: none   Gated: none
+- [ ] T-074 — TOC: a repeated `##` key should use its last value
+      Why: warcraft.wiki.gg "TOC format" (read 2026-11-24): a directive given more than once takes its last value, after inline directives are applied; `parse_toc` keeps the FIRST value, a T-003 choice its own comment calls unverified. A TOC repeating `## Title:` or `## SavedVariables:` is read differently from the client.
+      Accept: `parse_toc` keeps the last value of a repeated key (after dropping lines whose inline directives exclude Forever) and its `header_lines` points at that line; a test with a repeated key fails against the pre-change code; every caller relying on first-wins is checked; full gate green.
+      Touches: `src/wow_addon_forge/tocfile.py`, `tests/test_tocfile.py`, `CHANGELOG.md`, `TASKS.md`   Depends: T-073   Gated: none
 
 ## Later
 - [ ] T-063 — In-game acceptance on Windows
@@ -86,6 +84,10 @@
 - [-] T-069 — API index: read the Ketho resources' build from the commit message — DROPPED 2026-11-24 (goose-deuce.md 2026-11-24 "T-067's "no build in its files" was false; T-069 dropped")
 
 ## Done
+- [x] T-073 — TOC: the rest of the inline syntax the wiki documents (2026-11-24, this commit)
+      Why: `parse_toc` keeps `[LoadIntoEnvironment …]`, `[Bootstrap]` and the path variables `[Family]`, `[Game]`, `[TextLocale]`, `[RegionalTextLocale]` as part of the file name, so `wow_check` reports real files as missing (an error); inline directives on `##` lines stay inside the header value; a line holding only a directive vanishes without a finding (warcraft.wiki.gg "TOC format", read 2026-11-24; goose-deuce.md 2026-11-24 T-064 entry listed some as not covered with no board item).
+      Accept: `LoadIntoEnvironment` and `Bootstrap` are known directives with a stated load rule; `[Family]` and `[Game]` expand to `Mainline` and `Camelot` (Ketho's README dump of the Forever client: `TOC [Family] => "Mainline"`, `TOC [Game] => "Camelot"`); `[TextLocale]` and `[RegionalTextLocale]` expand to the headless locale when loading, and lint accepts the line when a file exists for at least one client locale; directives on `##` lines are stripped from the value and kept; a directive-only line is a lint warning; tests fail against the pre-change code; full gate green.
+      Touches: `src/wow_addon_forge/tocfile.py`, `src/wow_addon_forge/check.py`, `tests/test_tocfile.py`, `tests/test_headless.py`, `tests/test_check.py`, `AGENTS.md`, `goose-deuce.md`, `CHANGELOG.md`, `TASKS.md`   Depends: none   Gated: none
 - [x] T-072 — wow_check and wow_test report files their TOC conditions exclude (2026-11-24, this commit)
       Why: T-064 drops condition-excluded files from `wow_check` without a finding, and the headless loader's `skipped_files` record has no caller, so a user never sees that a listed file was not checked or loaded (AGENTS.md: nothing silent).
       Accept: The `wow_check` and `wow_test` results carry `skipped_files`, one `{file, reason}` per listed file the TOC conditions exclude (check: Forever game types, any locale; test: the headless enUS client), empty when none; the verdict and finding shape (`docs/SPEC-PLUGIN.md` §4: severity is error or warning) are unchanged; the headless loader and `wow_test` read the client Interface and locale from one constant each; tests fail against the pre-change code; full gate green.

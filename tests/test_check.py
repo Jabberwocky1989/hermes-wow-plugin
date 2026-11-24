@@ -711,3 +711,26 @@ def test_test_report_uses_the_headless_locale_for_locale_conditions(
     assert _check(fake_fs_factory, files, base, tmp_path)["skipped_files"] == []
     tested = run_addon_tests(base, index=_index(), fs=fake_fs_factory(files))
     assert [item["file"] for item in tested["skipped_files"]] == ["Classic.lua"]
+
+
+def test_check_compiles_every_locale_variant_and_family_file(
+    fake_fs_factory: Any, tmp_path: Path
+) -> None:
+    # [2026-11-24 T-073] A syntax error in any locale's file is found, because some player
+    # loads it; a [Family] line checks the Mainline file Forever loads.
+    base = "/addons/Vars"
+    files = {
+        f"{base}/Vars.toc": "## Interface: 16001\n## Title: Vars\n[Family]/Core.lua\n"
+        "Locale/[TextLocale].lua\n",
+        f"{base}/Mainline/Core.lua": "VarsCore = true\n",
+        f"{base}/Locale/enUS.lua": 'VarsText = "hi"\n',
+        f"{base}/Locale/deDE.lua": 'VarsText = "hallo"\nlocal broken = (\n',
+    }
+    payload = _check(fake_fs_factory, files, base, tmp_path)
+    assert payload["verdict"] == "fail"
+    assert [item["file"] for item in payload["findings"] if item["severity"] == "error"] == [
+        "Locale/deDE.lua"
+    ]
+    files[f"{base}/Locale/deDE.lua"] = 'VarsText = "hallo"\n'
+    clean = _check(fake_fs_factory, files, base, tmp_path)
+    assert clean["verdict"] == "pass", clean["findings"]

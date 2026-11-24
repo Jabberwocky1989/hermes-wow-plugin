@@ -439,7 +439,15 @@ def check_addon(
     # API findings here. Locale is not filtered (None): a static check covers every locale.
     # [2026-11-24 T-072] The excluded half is reported as `skipped_files`, never dropped.
     forever_files, skipped = toc.files_loaded(locale=None)
-    for rel_file in forever_files:
+    # [2026-11-24 T-073] A `[TextLocale]` line names one file per locale; each one present
+    # is compiled and analysed, since some player loads it. Absent variants are not errors
+    # here: lint_toc already reports a line none of whose variants exists.
+    variant_files = list(
+        dict.fromkeys(
+            variant for listed in forever_files for variant in tocfile.toc_path_variants(listed)
+        )
+    )
+    for rel_file in variant_files:
         if not rel_file.lower().endswith(".lua") or not _is_safe_rel(rel_file):
             continue
         file_path = _join_rel(active_fs, addon_path, rel_file)

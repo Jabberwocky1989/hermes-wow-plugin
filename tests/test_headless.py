@@ -937,3 +937,24 @@ def test_inline_toc_conditions_decide_which_files_load(tmp_path: Path) -> None:
     assert "AllowLoadGameType vanilla, tbc" in skipped[0][1]
     assert "frFR" in skipped[1][1]
     assert client.skipped_files("NotLoaded") == ()
+
+
+def test_toc_path_variables_load_the_enus_client_file(tmp_path: Path) -> None:
+    # [2026-11-24 T-073] Before T-073 `Locale\[TextLocale].lua` was a file literally named
+    # with brackets, so the loader raised for a missing file. The headless client is enUS
+    # and its Family is Mainline, so exactly those files load.
+    addon = tmp_path / "Vars"
+    (addon / "Locale").mkdir(parents=True)
+    (addon / "Mainline").mkdir()
+    (addon / "Vars.toc").write_text(
+        "## Interface: 16001\r\n[Family]\\Core.lua\r\nLocale\\[TextLocale].lua\r\n",
+        encoding="utf-8",
+    )
+    (addon / "Mainline" / "Core.lua").write_text("VarsFamily = true\n", encoding="utf-8")
+    (addon / "Locale" / "enUS.lua").write_text('VarsLocale = "enUS"\n', encoding="utf-8")
+    (addon / "Locale" / "deDE.lua").write_text('VarsLocale = "deDE"\n', encoding="utf-8")
+    client = World(index=minimal_api_index(), rng_seed=1).client("Ann")
+    client.load_addon(addon)
+    assert client.errors == []
+    assert client.eval("VarsFamily") is True
+    assert client.eval("VarsLocale") == "enUS"

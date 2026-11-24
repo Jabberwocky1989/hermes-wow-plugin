@@ -94,7 +94,9 @@ green commit, record where the work lives on the task, and stop cleanly.
     memory of Classic or pre-12.0 APIs: look every call and event up in the API index first.
   - **TOC file lines can carry load conditions** (`File.lua [AllowLoadGameType mainline]`).
     Forever answers to `forever`, `camelot` and the `mainline` family, so a mainline-only file
-    DOES load. `tocfile.files_loaded` owns the rule; never split TOC lines by hand (T-064).
+    DOES load. Lines can also hold path variables: `[Family]` is `Mainline` and `[Game]` is `Camelot` on
+    Forever, `[TextLocale]` is per player. `tocfile.files_loaded` and `toc_path_variants` own the rules;
+    never split TOC lines by hand (T-064, T-073).
   - **Addons have no network or file I/O.** Game → outside is SavedVariables, flushed only on
     `/reload` or logout. Outside → game is a data `.lua` file inside the addon folder that the
     TOC already lists (re-read on `/reload`; a NEW file needs a client restart).

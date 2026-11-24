@@ -17,6 +17,7 @@ from wow_addon_forge.tocfile import (
     lint_toc,
     parse_toc,
     strip_ui_escapes,
+    toc_path_variants,
 )
 
 _EXAMPLE = (
@@ -876,3 +877,91 @@ def test_lint_warns_about_windows_reserved_folder_and_file_names_on_every_os(
     ]
     assert "'Aux'" in reserved[0].message
     assert "'Nul.lua'" in reserved[1].message
+
+
+# [2026-11-24 T-073] The rest of the inline syntax on warcraft.wiki.gg "TOC format".
+
+
+def test_load_into_environment_and_bootstrap_are_directives_with_load_rules() -> None:
+    toc = parse_toc(
+        "Core.lua [LoadIntoEnvironment Global]\n"
+        "Secure.lua [LoadIntoEnvironment Secure]\n"
+        "Boot.lua [Bootstrap]\n"
+    )
+    assert toc.files == ("Core.lua", "Secure.lua", "Boot.lua")
+    assert all(directive.known for index in range(3) for directive in toc.directives_for(index))
+    loaded, skipped = toc.files_loaded()
+    assert loaded == ("Core.lua", "Boot.lua")
+    assert [path for path, _ in skipped] == ["Secure.lua"]
+    assert "only Blizzard code" in skipped[0][1]
+
+
+def test_path_variables_expand_for_the_forever_client() -> None:
+    toc = parse_toc(
+        "[Family]\\File.lua\n[game]/Mode.lua\nLocale\\[TextLocale].lua\n"
+        "Regional/[RegionalTextLocale].lua\n"
+    )
+    # files keep the line as written (separators normalised); loading expands it.
+    assert toc.files[0] == "[Family]/File.lua"
+    loaded, _ = toc.files_loaded(locale="enUS")
+    assert loaded == (
+        "Mainline/File.lua",
+        "Camelot/Mode.lua",
+        "Locale/enUS.lua",
+        "Regional/enUS.lua",
+    )
+    # Without a locale, the locale variables stay for toc_path_variants to widen.
+    loaded_any, _ = toc.files_loaded(locale=None)
+    assert loaded_any[2] == "Locale/[TextLocale].lua"
+    assert len(toc_path_variants("Locale/[TextLocale].lua")) == 11
+    assert "Regional/enGB.lua" in toc_path_variants("Regional/[RegionalTextLocale].lua")
+    assert toc_path_variants("[Family]/File.lua") == ("Mainline/File.lua",)
+
+
+def test_lint_accepts_variable_lines_when_any_variant_exists(
+    fake_fs_factory: Callable[..., FileSystem],
+) -> None:
+    toc_text = (
+        "## Interface: 16001\n## Title: X\n"
+        "[Family]\\Core.lua\nLocale\\[TextLocale].lua\n"
+        "Core.lua [LoadIntoEnvironment Global]\n"
+    )
+    files = {
+        f"{_ADDON_DIR}/{_TOC_NAME}": toc_text,
+        f"{_ADDON_DIR}/Mainline/Core.lua": "",
+        f"{_ADDON_DIR}/Locale/deDE.lua": "",
+        f"{_ADDON_DIR}/Locale/frFR.lua": "",
+        f"{_ADDON_DIR}/Core.lua": "",
+    }
+    findings = _lint(fake_fs_factory, toc_text, files)
+    assert [item.code for item in findings if item.severity == "error"] == []
+    assert not [item for item in findings if item.code == "unlisted-file"]
+    del files[f"{_ADDON_DIR}/Locale/deDE.lua"], files[f"{_ADDON_DIR}/Locale/frFR.lua"]
+    missing = [
+        item for item in _lint(fake_fs_factory, toc_text, files) if item.code == "missing-file"
+    ]
+    assert [item.line for item in missing] == [4]
+
+
+def test_header_lines_shed_directives_and_skip_lines_excluding_forever() -> None:
+    toc = parse_toc(
+        "## Title: Classic title [AllowLoadGameType classic]\n"
+        "## Title: Forever title\n"
+        "## X-DBM-Voice-MaxCount: 11 [AllowLoadGameType mainline]\n"
+    )
+    assert toc.headers["Title"] == "Forever title"
+    assert toc.headers["X-DBM-Voice-MaxCount"] == "11"
+
+
+def test_directive_only_line_is_a_warning(fake_fs_factory: Callable[..., FileSystem]) -> None:
+    toc_text = "## Interface: 16001\n## Title: X\n[AllowLoadGameType mainline]\nCore.lua\n"
+    files = {f"{_ADDON_DIR}/{_TOC_NAME}": toc_text, f"{_ADDON_DIR}/Core.lua": ""}
+    toc = parse_toc(toc_text)
+    assert toc.files == ("Core.lua",)
+    assert toc.directive_only_lines == (3,)
+    warned = [
+        item
+        for item in _lint(fake_fs_factory, toc_text, files)
+        if item.code == "directive-only-line"
+    ]
+    assert [(item.severity, item.line) for item in warned] == [("warning", 3)]

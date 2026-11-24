@@ -3,6 +3,7 @@
      `<YYYY-MM-DD> — T-<###> — <what changed, user-visible effect>`
      Internal-only tasks get one line ending `(no user-visible change)`. -->
 
+2026-11-24 — T-073 — TOC files using the rest of the documented inline syntax now check and load: `[LoadIntoEnvironment …]` and `[Bootstrap]` directives, the path variables `[Family]` (Mainline), `[Game]` (Camelot), `[TextLocale]` and `[RegionalTextLocale]` (`wow_check` checks every locale's file; headless tests load the enUS one), and directives on `##` header lines; a line holding only directives is now a lint warning. Before, these were reported as missing files
 2026-11-24 — T-072 — `wow_check` and `wow_test` results now list `skipped_files`: each TOC-listed file that an inline condition such as `[AllowLoadGameType vanilla]` excludes, with the reason. Before, such a file was left out of the check and the headless load without a word
 2026-11-24 — T-071 — `wow_api sync` and `status` now report the build the resource lists were dumped from (`resource_build`, read from the resource mirror's README) and warn when it differs from the documentation build; on 2026-11-24 that is 70938 against 71091. This replaces T-067's statement that the build could not be read, which was wrong
 2026-11-24 — T-070 — Corrected the T-065 and T-066 entries below, which claimed more than was checked, and a code comment in the API index (no behaviour change)

@@ -221,8 +221,10 @@ KNOWN_GAME_TYPES: frozenset[str] = frozenset(
     }
 )
 
-# [2026-11-24 T-064] The inline directives the wiki lists, lower-cased. Inline directives
-# are `[Name]` or `[Name value, value]` and may appear several times on one line.
+# [2026-11-24 T-064] Inline directives are `[Name]` or `[Name value, value]` and may appear
+# several times on one line. [2026-11-24 T-073] The full list on warcraft.wiki.gg "TOC
+# format" (read 2026-11-24), lower-cased: T-064 had missed LoadIntoEnvironment and
+# Bootstrap, so a line carrying either was checked as a file literally named with it.
 KNOWN_INLINE_DIRECTIVES: frozenset[str] = frozenset(
     {
         "allowload",
@@ -230,13 +232,108 @@ KNOWN_INLINE_DIRECTIVES: frozenset[str] = frozenset(
         "excludeloadgametype",
         "allowloadtextlocale",
         "allowloadenvironment",
+        "bootstrap",
+        "loadintoenvironment",
     }
 )
 
 # [2026-11-24 T-064] Only bracket groups named AllowLoad…/ExcludeLoad… are taken as
 # directives. Any other `[...]` stays part of the path exactly as before, so a file name
-# that really contains brackets is not rewritten by a guess.
-_INLINE_DIRECTIVE = re.compile(r"\[\s*((?:Allow|Exclude)Load\w*)(?:\s+([^\]]*))?\]", re.IGNORECASE)
+# that really contains brackets is not rewritten by a guess. [2026-11-24 T-073] The two
+# directives outside that pattern, LoadIntoEnvironment and Bootstrap, are named exactly.
+_INLINE_DIRECTIVE = re.compile(
+    r"\[\s*((?:Allow|Exclude)Load\w*|LoadIntoEnvironment|Bootstrap)(?:\s+([^\]]*))?\]",
+    re.IGNORECASE,
+)
+
+# [2026-11-24 T-073] TOC path variables (wiki "TOC format" → Variables): `[Family]`,
+# `[Game]`, `[TextLocale]` and `[RegionalTextLocale]` expand inside a file line. The Forever
+# client's values come from Ketho/BlizzardInterfaceResources' README, a dump taken in that
+# client (forever branch, build 70938): `TOC [Family] => "Mainline"`, `TOC [Game] =>
+# "Camelot"`. The wiki notes Camelot may later become Forever; this table is the one place
+# to change then.
+FOREVER_TOC_VARIABLES: dict[str, str] = {"family": "Mainline", "game": "Camelot"}
+
+# [2026-11-24 T-073] Client text locales, from the wiki's GetAvailableLocaleInfo table (read
+# 2026-11-24); `[TextLocale]` expands to one of these. `[RegionalTextLocale]` can also give
+# enGB or ptPT (the wiki's examples for the EU region).
+CLIENT_TEXT_LOCALES: tuple[str, ...] = (
+    "enUS",
+    "koKR",
+    "frFR",
+    "deDE",
+    "zhCN",
+    "esES",
+    "zhTW",
+    "esMX",
+    "ruRU",
+    "ptBR",
+    "itIT",
+)
+REGIONAL_TEXT_LOCALES: tuple[str, ...] = (*CLIENT_TEXT_LOCALES, "enGB", "ptPT")
+
+_TOC_VARIABLE = re.compile(r"\[(Family|Game|TextLocale|RegionalTextLocale)\]", re.IGNORECASE)
+
+
+def expand_toc_variables(path: str, *, locale: str | None) -> str:
+    """Expand the TOC path variables in one file line for the Forever client.
+
+    Why this exists:
+        [2026-11-24 T-073] `Locale/[TextLocale].lua` names a different file per client; the
+        headless loader needs the one its client loads, and the checker the set it might.
+
+    Args:
+        path: A file line as ``TocFile.files`` holds it.
+        locale: The client text locale, e.g. ``"enUS"``; None leaves ``[TextLocale]`` and
+            ``[RegionalTextLocale]`` in place (``toc_path_variants`` expands those).
+
+    Returns:
+        The path with ``[Family]`` and ``[Game]`` replaced by ``FOREVER_TOC_VARIABLES``
+        and, when ``locale`` is given, both locale variables replaced by it. Using the same
+        value for ``[RegionalTextLocale]`` is right for an NA client (enUS gives enUS) and
+        is this function's assumption for the rest.
+
+    Failure modes:
+        None; a path without variables comes back unchanged.
+    """
+
+    def replace(match: re.Match[str]) -> str:
+        key = match.group(1).lower()
+        if key in FOREVER_TOC_VARIABLES:
+            return FOREVER_TOC_VARIABLES[key]
+        return match.group(0) if locale is None else locale
+
+    return _TOC_VARIABLE.sub(replace, path)
+
+
+def toc_path_variants(path: str) -> tuple[str, ...]:
+    """Return every path a file line can name on a Forever client, across locales.
+
+    Why this exists:
+        [2026-11-24 T-073] A static check covers every player's locale: a listed
+        `Locale/[TextLocale].lua` is present when any locale's file exists, and each of
+        those files is listed, not stray.
+
+    Args:
+        path: A file line as ``TocFile.files`` holds it.
+
+    Returns:
+        The expanded paths, without duplicates, in locale order; one path when the line has
+        no locale variable. With both locale variables on one line, each variant puts the
+        same locale in both (pairs such as enUS with enGB are not generated).
+
+    Failure modes:
+        None.
+    """
+    fixed = expand_toc_variables(path, locale=None)
+    lowered = fixed.lower()
+    if "[regionaltextlocale]" in lowered:
+        locales = REGIONAL_TEXT_LOCALES
+    elif "[textlocale]" in lowered:
+        locales = CLIENT_TEXT_LOCALES
+    else:
+        return (fixed,)
+    return tuple(dict.fromkeys(expand_toc_variables(fixed, locale=code) for code in locales))
 
 
 @dataclass(frozen=True)
@@ -298,7 +395,11 @@ def file_skip_reason(
 
     Returns:
         ``None`` when every condition admits the client, else one sentence naming the
-        directive that excludes it. Rules, per warcraft.wiki.gg "TOC format":
+        directive that excludes it. Rules, per warcraft.wiki.gg "TOC format" (and
+        [2026-11-24 T-073] ``LoadIntoEnvironment Secure`` excludes, since only Blizzard code
+        loads there, while ``Bootstrap`` never excludes: the headless loader does not model
+        LoadOnDemand bootstrapping, so such a file is loaded and checked like any other,
+        which is unverified in game):
         ``AllowLoadGameType`` admits a listed type or family, and also a list whose names
         are all outside ``KNOWN_GAME_TYPES``; ``ExcludeLoadGameType`` refuses a listed type
         or family; ``AllowLoadTextLocale`` admits a listed locale; ``AllowLoad`` admits
@@ -327,6 +428,8 @@ def file_skip_reason(
                 return f"{shown} limits the file to the glue screen, where addons never load."
         elif key == "allowloadenvironment" and values and "global" not in values:
             return f"{shown} limits the file to an environment addon code does not run in."
+        elif key == "loadintoenvironment" and values and "global" not in values:
+            return f"{shown} loads the file into an environment only Blizzard code can use."
     return None
 
 
@@ -348,11 +451,15 @@ class TocFile:
         headers: ``## Key: Value`` lines, key and value stripped, keys stored exactly as
             written (case-sensitive); a repeated key keeps the first value.
         files: Every non-blank, non-comment line in order, stripped, with ``\\`` normalised
-            to ``/`` and inline directives removed ([2026-11-24 T-064]).
+            to ``/`` and inline directives removed ([2026-11-24 T-064]). Path variables such
+            as ``[TextLocale]`` stay as written ([2026-11-24 T-073]); ``files_loaded`` and
+            ``toc_path_variants`` expand them.
         header_lines: 1-based line number of the first occurrence of each header key, for
             lint positions. Excluded from equality: where a header sits is not what it means.
         file_lines: ``(normalised_file_path, line_no)`` for each entry in ``files``, in the
             same order. Excluded from equality for the same reason as ``header_lines``.
+        directive_only_lines: [2026-11-24 T-073] 1-based numbers of lines that hold only
+            inline directives; excluded from equality like the other positions.
         file_directives: ``{index into files: inline directives}`` for the file lines that
             carry any ([2026-11-24 T-064]). Part of equality: a condition changes whether the
             client loads the file. Lines without directives have no key, so a hand-built
@@ -370,6 +477,9 @@ class TocFile:
     header_lines: dict[str, int] = field(default_factory=dict, compare=False)
     file_lines: tuple[tuple[str, int], ...] = field(default_factory=tuple, compare=False)
     file_directives: dict[int, tuple[InlineDirective, ...]] = field(default_factory=dict)
+    # [2026-11-24 T-073] Line numbers of lines holding only inline directives, with no path;
+    # parse_toc drops them, so lint_toc reads this to say so instead of losing them silently.
+    directive_only_lines: tuple[int, ...] = field(default_factory=tuple, compare=False)
 
     def directives_for(self, index: int) -> tuple[InlineDirective, ...]:
         """Return the inline directives of ``files[index]`` (empty when it has none).
@@ -398,6 +508,9 @@ class TocFile:
 
         Returns:
             ``(loaded, skipped)``: loaded paths in TOC order, and ``(path, reason)`` pairs.
+            [2026-11-24 T-073] Paths come back through ``expand_toc_variables``: with a
+            locale, every variable is expanded; with ``None``, ``[TextLocale]`` and
+            ``[RegionalTextLocale]`` stay for the caller to widen with ``toc_path_variants``.
 
         Failure modes:
             None.
@@ -408,10 +521,11 @@ class TocFile:
             reason = file_skip_reason(
                 self.directives_for(index), game_types=game_types, locale=locale
             )
+            expanded = expand_toc_variables(path, locale=locale)
             if reason is None:
-                loaded.append(path)
+                loaded.append(expanded)
             else:
-                skipped.append((path, reason))
+                skipped.append((expanded, reason))
         return tuple(loaded), tuple(skipped)
 
     @property
@@ -557,6 +671,7 @@ def parse_toc(text: str) -> TocFile:
     files: list[str] = []
     file_lines: list[tuple[str, int]] = []
     file_directives: dict[int, tuple[InlineDirective, ...]] = {}
+    directive_only_lines: list[int] = []
     # [2026-11-11 T-006] Line numbers are counted after the BOM is stripped, so a BOM can
     # never shift a reported position; the BOM sits on line 1 either way, but counting the
     # stripped text keeps the rule true by construction rather than by luck.
@@ -569,6 +684,14 @@ def parse_toc(text: str) -> TocFile:
             if not separator:
                 continue
             stripped_key = key.strip()
+            # [2026-11-24 T-073] Header lines take inline directives too (wiki "TOC format":
+            # `## Title: My Cool AddOn in Classic [AllowLoadGameType classic]`). They come off
+            # the value, and a line whose conditions exclude Forever does not apply to it.
+            # Locale conditions are ignored here (locale None): a header has one value.
+            header_value, header_directives = _split_inline_directives(value)
+            if header_directives and file_skip_reason(header_directives) is not None:
+                continue
+            value = header_value
             # [2026-11-11 T-003] First value wins for a repeated key; our choice, not verified
             # against the live client.
             if stripped_key and stripped_key not in headers:
@@ -582,6 +705,8 @@ def parse_toc(text: str) -> TocFile:
         # `Core/Retail.lua` and keeps its condition beside it instead of inside the name.
         path, directives = _split_inline_directives(line)
         if not path:
+            # [2026-11-24 T-073] Only directives, no file: kept by number for lint_toc.
+            directive_only_lines.append(line_no)
             continue
         normalised = path.replace("\\", "/")
         if directives:
@@ -594,6 +719,7 @@ def parse_toc(text: str) -> TocFile:
         header_lines=header_lines,
         file_lines=tuple(file_lines),
         file_directives=file_directives,
+        directive_only_lines=tuple(directive_only_lines),
     )
 
 
@@ -751,7 +877,11 @@ def lint_toc(
                 )
             )
             continue
-        if not fs.is_file(fs.join(addon_dir, *segments)):
+        # [2026-11-24 T-073] A line with path variables is present when any variant exists.
+        if not any(
+            fs.is_file(fs.join(addon_dir, *variant.split("/")))
+            for variant in toc_path_variants(rel_path)
+        ):
             findings.append(
                 Finding(
                     severity="error",
@@ -782,7 +912,8 @@ def lint_toc(
                     ),
                     hint=(
                         "Use AllowLoad, AllowLoadGameType, ExcludeLoadGameType, "
-                        "AllowLoadTextLocale or AllowLoadEnvironment."
+                        "AllowLoadTextLocale, AllowLoadEnvironment, Bootstrap or "
+                        "LoadIntoEnvironment."
                     ),
                 )
             )
@@ -812,7 +943,24 @@ def lint_toc(
             )
         )
 
-    listed_set = set(toc.files)
+    # [2026-11-24 T-073] A file line with nothing but directives names no file: the client
+    # has nothing to load there, which is rarely what the author meant.
+    for line_no in toc.directive_only_lines:
+        findings.append(
+            Finding(
+                severity="warning",
+                code="directive-only-line",
+                file=toc_filename,
+                line=line_no,
+                message="This line holds only inline directives and names no file to load.",
+                hint="Put the file name before the directives, or delete the line.",
+            )
+        )
+
+    # [2026-11-24 T-073] Every locale's file a variable line can name counts as listed.
+    listed_set = {
+        variant for listed_path in toc.files for variant in toc_path_variants(listed_path)
+    }
     for relative in _walk_lua_files(fs, addon_dir):
         if relative not in listed_set:
             findings.append(
