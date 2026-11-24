@@ -91,6 +91,9 @@ green commit, record where the work lives on the task, and stop cleanly.
     `camelot`, retail 12.1.5 ("Midnight") API with secret values. `COMBAT_LOG_EVENT_UNFILTERED`
     is restricted and `CombatLogGetCurrentEventInfo` is absent. Never write addon code from
     memory of Classic or pre-12.0 APIs: look every call and event up in the API index first.
+  - **TOC file lines can carry load conditions** (`File.lua [AllowLoadGameType mainline]`).
+    Forever answers to `forever`, `camelot` and the `mainline` family, so a mainline-only file
+    DOES load. `tocfile.files_loaded` owns the rule; never split TOC lines by hand (T-064).
   - **Addons have no network or file I/O.** Game → outside is SavedVariables, flushed only on
     `/reload` or logout. Outside → game is a data `.lua` file inside the addon folder that the
     TOC already lists (re-read on `/reload`; a NEW file needs a client restart).

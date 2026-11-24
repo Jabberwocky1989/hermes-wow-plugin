@@ -4,7 +4,11 @@ Invariants owned by this file:
 - ``parse_toc`` is the single place TOC line rules live: headers, file lines, and the header
   views (Interface, Title, Version, SavedVariables) that callers report.
 - File lines are returned as written apart from the separator: ``\\`` is normalised to ``/`` and
-  surrounding whitespace is stripped, nothing else is rewritten by the parser.
+  surrounding whitespace is stripped. [2026-11-24 T-064] Inline ``[AllowLoad…]`` /
+  ``[ExcludeLoad…]`` directives are also removed from the path and kept per file in
+  ``TocFile.file_directives``; nothing else is rewritten by the parser.
+- [2026-11-24 T-064] ``file_skip_reason`` / ``TocFile.files_loaded`` are the single place the
+  inline load conditions are judged, so ``wow_check`` and the headless loader agree.
 - A repeated header key keeps the FIRST value. That is this parser's choice and is not verified
   against the live client.
 - ``TocFile.header_lines`` and ``TocFile.file_lines`` record 1-based source positions for lint
@@ -157,6 +161,175 @@ def is_valid_lua_identifier(name: str) -> bool:
     return bool(_LUA_IDENTIFIER.match(name)) and name not in LUA_51_KEYWORDS
 
 
+# [2026-11-24 T-064] Windows device names, which Microsoft's file-naming rules reserve with or
+# without an extension (any case). Observed on Windows 11 build 26300: a folder named `NUL`
+# could not be created, while `CON`, `AUX` and `COM1` could; other Windows versions were not
+# tried. The superscript-digit forms (`COM¹`) are not in this set.
+_WINDOWS_RESERVED_NAMES: frozenset[str] = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{digit}" for digit in range(10)}
+    | {f"LPT{digit}" for digit in range(10)}
+)
+
+
+def is_windows_reserved_name(name: str) -> bool:
+    """Return whether Windows reserves ``name`` (one path segment) for a device.
+
+    Why this exists:
+        An addon is shared between players on every OS, so an addon built on macOS or
+        Linux with a folder or file named ``Aux`` may be impossible to install for a guild
+        mate on Windows. The rule lives here once so ``wow_new`` and ``lint_toc`` agree.
+
+    Args:
+        name: One path segment, such as ``"Aux"`` or ``"Nul.lua"``.
+
+    Returns:
+        ``True`` when the part before the first ``.``, with trailing spaces removed and
+        compared case-insensitively, is a reserved device name (``CON``, ``PRN``, ``AUX``,
+        ``NUL``, ``COM0``-``COM9``, ``LPT0``-``LPT9``).
+
+    Failure modes:
+        None; any other name gives ``False``.
+    """
+    return name.split(".", 1)[0].rstrip(" ").upper() in _WINDOWS_RESERVED_NAMES
+
+
+# [2026-11-24 T-064] Game types WoW: Forever answers to, per warcraft.wiki.gg "TOC format"
+# (read 2026-11-24): the game type is listed as both `forever` and `camelot`, and both
+# belong to the `mainline` family. A `[AllowLoadGameType mainline]` file therefore DOES load
+# in Forever, which a check against `camelot` alone would get wrong.
+FOREVER_GAME_TYPES: frozenset[str] = frozenset({"forever", "camelot", "mainline"})
+
+# [2026-11-24 T-064] Every game type and family the same wiki table lists. The wiki warns
+# that an AllowLoadGameType list naming ONLY types the client does not recognise is
+# satisfied (the file loads). Which names the Forever client recognises is not verified;
+# this table is the assumption, so a list naming only future types loads, as documented.
+KNOWN_GAME_TYPES: frozenset[str] = frozenset(
+    {
+        "standard",
+        "forever",
+        "camelot",
+        "mists",
+        "cata",
+        "wrath",
+        "tbc",
+        "vanilla",
+        "plunderstorm",
+        "wowhack",
+        "mainline",
+        "classic",
+    }
+)
+
+# [2026-11-24 T-064] The inline directives the wiki lists, lower-cased. Inline directives
+# are `[Name]` or `[Name value, value]` and may appear several times on one line.
+KNOWN_INLINE_DIRECTIVES: frozenset[str] = frozenset(
+    {
+        "allowload",
+        "allowloadgametype",
+        "excludeloadgametype",
+        "allowloadtextlocale",
+        "allowloadenvironment",
+    }
+)
+
+# [2026-11-24 T-064] Only bracket groups named AllowLoad…/ExcludeLoad… are taken as
+# directives. Any other `[...]` stays part of the path exactly as before, so a file name
+# that really contains brackets is not rewritten by a guess.
+_INLINE_DIRECTIVE = re.compile(r"\[\s*((?:Allow|Exclude)Load\w*)(?:\s+([^\]]*))?\]", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class InlineDirective:
+    """One inline TOC directive attached to a file line, such as ``[AllowLoadGameType vanilla]``.
+
+    Why this exists:
+        A TOC file line may carry load conditions after its path (warcraft.wiki.gg "TOC
+        format"). Keeping them apart from the path lets callers check the real file and
+        decide whether the client would load it.
+
+    Args:
+        name: The directive name as written, e.g. ``"AllowLoadGameType"``.
+        values: The comma-separated values, stripped, in order; empty for ``[AllowLoad]``.
+
+    Failure modes:
+        None at construction.
+    """
+
+    name: str
+    values: tuple[str, ...]
+
+    @property
+    def known(self) -> bool:
+        """Return whether the name is one of ``KNOWN_INLINE_DIRECTIVES`` (case-insensitive)."""
+        return self.name.lower() in KNOWN_INLINE_DIRECTIVES
+
+
+def _split_inline_directives(line: str) -> tuple[str, tuple[InlineDirective, ...]]:
+    directives: list[InlineDirective] = []
+
+    def take(match: re.Match[str]) -> str:
+        raw_values = match.group(2) or ""
+        values = tuple(value.strip() for value in raw_values.split(",") if value.strip())
+        directives.append(InlineDirective(name=match.group(1), values=values))
+        return ""
+
+    path = _INLINE_DIRECTIVE.sub(take, line).strip()
+    return path, tuple(directives)
+
+
+def file_skip_reason(
+    directives: tuple[InlineDirective, ...],
+    *,
+    game_types: frozenset[str] = FOREVER_GAME_TYPES,
+    locale: str | None = None,
+) -> str | None:
+    """Return why the client would NOT load a TOC file line, or ``None`` when it would.
+
+    Why this exists:
+        The headless loader and ``wow_check`` must load and check the files the real client
+        loads, not every line of the TOC; one function owns the condition rules.
+
+    Args:
+        directives: The file's inline directives (``TocFile.directives_for``).
+        game_types: The client's game type and family names, lower-case.
+        locale: The client text locale such as ``"enUS"``, or ``None`` to ignore
+            ``AllowLoadTextLocale`` (a static check covers every player's locale).
+
+    Returns:
+        ``None`` when every condition admits the client, else one sentence naming the
+        directive that excludes it. Rules, per warcraft.wiki.gg "TOC format":
+        ``AllowLoadGameType`` admits a listed type or family, and also a list whose names
+        are all outside ``KNOWN_GAME_TYPES``; ``ExcludeLoadGameType`` refuses a listed type
+        or family; ``AllowLoadTextLocale`` admits a listed locale; ``AllowLoad`` admits
+        ``Game`` or ``Both``; ``AllowLoadEnvironment`` admits ``Global`` (third-party addon
+        code runs in the global environment — inferred from the wiki, not verified in game).
+        Unknown directive names never exclude a file; ``lint_toc`` warns about them instead.
+
+    Failure modes:
+        None.
+    """
+    for directive in directives:
+        key = directive.name.lower()
+        values = {value.lower() for value in directive.values}
+        shown = f"[{directive.name} {', '.join(directive.values)}]".replace(" ]", "]")
+        if key == "allowloadgametype":
+            if values & KNOWN_GAME_TYPES and not values & game_types:
+                return f"{shown} does not include this client's game type."
+        elif key == "excludeloadgametype":
+            if values & game_types:
+                return f"{shown} excludes this client's game type."
+        elif key == "allowloadtextlocale":
+            if locale is not None and values and locale.lower() not in values:
+                return f"{shown} does not include the client locale {locale}."
+        elif key == "allowload":
+            if values and not values & {"game", "both"}:
+                return f"{shown} limits the file to the glue screen, where addons never load."
+        elif key == "allowloadenvironment" and values and "global" not in values:
+            return f"{shown} limits the file to an environment addon code does not run in."
+    return None
+
+
 def _split_saved_variables(raw: str | None) -> tuple[str, ...]:
     if raw is None:
         return ()
@@ -175,11 +348,15 @@ class TocFile:
         headers: ``## Key: Value`` lines, key and value stripped, keys stored exactly as
             written (case-sensitive); a repeated key keeps the first value.
         files: Every non-blank, non-comment line in order, stripped, with ``\\`` normalised
-            to ``/``.
+            to ``/`` and inline directives removed ([2026-11-24 T-064]).
         header_lines: 1-based line number of the first occurrence of each header key, for
             lint positions. Excluded from equality: where a header sits is not what it means.
         file_lines: ``(normalised_file_path, line_no)`` for each entry in ``files``, in the
             same order. Excluded from equality for the same reason as ``header_lines``.
+        file_directives: ``{index into files: inline directives}`` for the file lines that
+            carry any ([2026-11-24 T-064]). Part of equality: a condition changes whether the
+            client loads the file. Lines without directives have no key, so a hand-built
+            ``TocFile(headers={}, files=("a.lua",))`` still equals ``parse_toc("a.lua")``.
 
     Failure modes:
         None at construction; absent or malformed headers surface as empty or ``None`` views
@@ -192,6 +369,50 @@ class TocFile:
     # TocFile(headers={}, files=()) must still equal parse_toc(""), positions or not.
     header_lines: dict[str, int] = field(default_factory=dict, compare=False)
     file_lines: tuple[tuple[str, int], ...] = field(default_factory=tuple, compare=False)
+    file_directives: dict[int, tuple[InlineDirective, ...]] = field(default_factory=dict)
+
+    def directives_for(self, index: int) -> tuple[InlineDirective, ...]:
+        """Return the inline directives of ``files[index]`` (empty when it has none).
+
+        Why this exists:
+            Callers walk ``files`` by position; this keeps the sparse ``file_directives``
+            map an implementation detail.
+        """
+        return self.file_directives.get(index, ())
+
+    def files_loaded(
+        self,
+        *,
+        game_types: frozenset[str] = FOREVER_GAME_TYPES,
+        locale: str | None = None,
+    ) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
+        """Split ``files`` into the ones the client loads and the ones it skips.
+
+        Why this exists:
+            ``wow_check`` and the headless loader must agree on which files a client loads;
+            both call this instead of re-walking the conditions.
+
+        Args:
+            game_types: The client's game type and family names (``file_skip_reason``).
+            locale: The client locale, or ``None`` to admit every locale.
+
+        Returns:
+            ``(loaded, skipped)``: loaded paths in TOC order, and ``(path, reason)`` pairs.
+
+        Failure modes:
+            None.
+        """
+        loaded: list[str] = []
+        skipped: list[tuple[str, str]] = []
+        for index, path in enumerate(self.files):
+            reason = file_skip_reason(
+                self.directives_for(index), game_types=game_types, locale=locale
+            )
+            if reason is None:
+                loaded.append(path)
+            else:
+                skipped.append((path, reason))
+        return tuple(loaded), tuple(skipped)
 
     @property
     def interface(self) -> tuple[int, ...]:
@@ -335,6 +556,7 @@ def parse_toc(text: str) -> TocFile:
     header_lines: dict[str, int] = {}
     files: list[str] = []
     file_lines: list[tuple[str, int]] = []
+    file_directives: dict[int, tuple[InlineDirective, ...]] = {}
     # [2026-11-11 T-006] Line numbers are counted after the BOM is stripped, so a BOM can
     # never shift a reported position; the BOM sits on line 1 either way, but counting the
     # stripped text keeps the rule true by construction rather than by luck.
@@ -355,7 +577,15 @@ def parse_toc(text: str) -> TocFile:
             continue
         if line.startswith("#"):
             continue
-        normalised = line.replace("\\", "/")
+        # [2026-11-24 T-064] Inline load conditions come off before the separator is
+        # normalised, so `Core\Retail.lua [AllowLoadGameType mainline]` lists the real file
+        # `Core/Retail.lua` and keeps its condition beside it instead of inside the name.
+        path, directives = _split_inline_directives(line)
+        if not path:
+            continue
+        normalised = path.replace("\\", "/")
+        if directives:
+            file_directives[len(files)] = directives
         files.append(normalised)
         file_lines.append((normalised, line_no))
     return TocFile(
@@ -363,6 +593,7 @@ def parse_toc(text: str) -> TocFile:
         files=tuple(files),
         header_lines=header_lines,
         file_lines=tuple(file_lines),
+        file_directives=file_directives,
     )
 
 
@@ -421,8 +652,9 @@ def lint_toc(
 
     Returns:
         Findings in rule order: ``toc-name-mismatch``, ``toc-interface``,
-        ``invalid-savedvar``, ``invalid-file-path`` / ``missing-file``, then
-        ``unlisted-file`` warnings. An empty list means the TOC passed every rule.
+        ``invalid-savedvar``, ``invalid-file-path`` / ``missing-file``, then the warnings
+        ``unknown-inline-directive`` and ``windows-reserved-name`` ([2026-11-24 T-064]),
+        then ``unlisted-file``. An empty list means the TOC passed every rule.
 
     Failure modes:
         None raised for a malformed TOC or an unreadable folder: rule violations become
@@ -530,6 +762,55 @@ def lint_toc(
                     hint="Create the file or remove its line from the TOC.",
                 )
             )
+
+    # [2026-11-24 T-064] An unrecognised AllowLoad…/ExcludeLoad… name is most likely a typo
+    # (`[AllowLoadGametypes …]`): the file still loads everywhere, which is rarely what the
+    # author meant, so it is a warning rather than silence.
+    for index, (rel_path, line_no) in enumerate(listed):
+        for directive in toc.directives_for(index):
+            if directive.known:
+                continue
+            findings.append(
+                Finding(
+                    severity="warning",
+                    code="unknown-inline-directive",
+                    file=toc_filename,
+                    line=line_no,
+                    message=(
+                        f"Listed file '{rel_path}' carries an unknown inline directive "
+                        f"[{directive.name}], so it does not restrict where the file loads."
+                    ),
+                    hint=(
+                        "Use AllowLoad, AllowLoadGameType, ExcludeLoadGameType, "
+                        "AllowLoadTextLocale or AllowLoadEnvironment."
+                    ),
+                )
+            )
+
+    # [2026-11-24 T-064] Reported on every OS on purpose: the author is often on macOS while
+    # guild mates install on Windows, where these names open a device instead of a file.
+    reserved_targets = [(expected_folder, 1, "Addon folder")]
+    reserved_targets += [
+        (segment, line_no, f"Listed file '{rel_path}'")
+        for rel_path, line_no in listed
+        for segment in rel_path.split("/")
+    ]
+    for name, line_no, subject in reserved_targets:
+        if not is_windows_reserved_name(name):
+            continue
+        findings.append(
+            Finding(
+                severity="warning",
+                code="windows-reserved-name",
+                file=toc_filename,
+                line=line_no,
+                message=(
+                    f"{subject} uses '{name}', a device name Windows reserves; players on "
+                    "Windows may be unable to install or load it."
+                ),
+                hint="Rename it to something other than CON, PRN, AUX, NUL, COM0-9 or LPT0-9.",
+            )
+        )
 
     listed_set = set(toc.files)
     for relative in _walk_lua_files(fs, addon_dir):

@@ -906,3 +906,34 @@ def test_headless_rejects_binary_addon_chunk_and_eval(fake_fs_factory: Any) -> N
         alice.eval("\x1bLuaQ\x00")
     assert exc.value.phase == "compile"
     assert "binary chunks are not allowed" in exc.value.message
+
+
+def test_inline_toc_conditions_decide_which_files_load(tmp_path: Path) -> None:
+    # [2026-11-24 T-064] Before T-064 the directive stayed in the path, the `.lua` suffix
+    # check failed, and Retail.lua (which Forever DOES load: camelot is in the mainline
+    # family) was skipped with no trace. Real folders on disk, so this runs on every OS.
+    addon = tmp_path / "Cond"
+    (addon / "Core").mkdir(parents=True)
+    (addon / "Cond.toc").write_text(
+        "## Interface: 16001\r\n"
+        "Core\\Main.lua\r\n"
+        "Core\\Retail.lua [AllowLoadGameType mainline]\r\n"
+        "Core\\Classic.lua [AllowLoadGameType vanilla, tbc]\r\n"
+        "Core\\French.lua [AllowLoadTextLocale frFR]\r\n",
+        encoding="utf-8",
+    )
+    for name in ("Main", "Retail", "Classic", "French"):
+        (addon / "Core" / f"{name}.lua").write_text(f"Loaded{name} = true\n", encoding="utf-8")
+    client = World(index=minimal_api_index(), rng_seed=1).client("Ann")
+    client.load_addon(addon)
+    assert client.errors == []
+    assert client.eval("LoadedMain") is True
+    assert client.eval("LoadedRetail") is True
+    # The world's globals are strict (an unknown name raises), so absence is read raw.
+    assert client.eval('rawget(_G, "LoadedClassic")') is None
+    assert client.eval('rawget(_G, "LoadedFrench")') is None
+    skipped = client.skipped_files("Cond")
+    assert [path for path, _ in skipped] == ["Core/Classic.lua", "Core/French.lua"]
+    assert "AllowLoadGameType vanilla, tbc" in skipped[0][1]
+    assert "frFR" in skipped[1][1]
+    assert client.skipped_files("NotLoaded") == ()

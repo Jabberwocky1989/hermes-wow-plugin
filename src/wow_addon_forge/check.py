@@ -417,7 +417,11 @@ def check_addon(
     # runtime; successfully compiled Protos are kept so stages 3, 4, and 6 never recompile.
     compile_rt = luavm.new_runtime(sandbox=False)
     compiled_files: list[tuple[str, Proto]] = []
-    for rel_file in toc.files:
+    # [2026-11-24 T-064] Only files the Forever client loads are compiled and analysed: a
+    # `[AllowLoadGameType vanilla]` file holds Classic-only calls that would read as false
+    # API findings here. Locale is not filtered (None): a static check covers every locale.
+    forever_files = toc.files_loaded(locale=None)[0]
+    for rel_file in forever_files:
         if not rel_file.lower().endswith(".lua") or not _is_safe_rel(rel_file):
             continue
         file_path = _join_rel(active_fs, addon_path, rel_file)

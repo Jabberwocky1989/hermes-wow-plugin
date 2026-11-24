@@ -191,6 +191,10 @@ _ALWAYS_NAMESPACES: tuple[str, ...] = (
 # [2026-11-11 T-007] The throttle model is two token buckets refilled from the
 # virtual clock: a burst of ten messages is legal, the sustained rate is one per
 # second, and advancing scenario time is the only way tokens come back.
+# [2026-11-24 T-064] The client text locale inline `[AllowLoadTextLocale …]` TOC conditions
+# are judged against. The headless world provides no GetLocale, so this only decides which
+# locale-restricted files load; enUS is an assumption, not a modelled client setting.
+_HEADLESS_LOCALE = "enUS"
 _BUCKET_CAPACITY = 10.0
 _BUCKET_REFILL_PER_SECOND = 1.0
 _MAX_REGISTERED_PREFIXES = 255
@@ -262,6 +266,8 @@ class _LoadedAddon:
     name: str
     path: str
     toc: tocfile.TocFile
+    # [2026-11-24 T-064] TOC files the inline conditions excluded, with the reason.
+    skipped: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass
@@ -1235,6 +1241,29 @@ class SimulatedClient:
         """
         return tuple(addon.name for addon in self._loaded_addons)
 
+    def skipped_files(self, addon_name: str) -> tuple[tuple[str, str], ...]:
+        """Return the TOC files of a loaded addon this client did not load, with reasons.
+
+        Why this exists:
+            [2026-11-24 T-064] A file whose inline TOC condition excludes WoW: Forever is
+            skipped on purpose, as the client skips it; recording it keeps that skip visible
+            instead of silent.
+
+        Args:
+            addon_name: The addon's folder name, as returned by ``load_addon``.
+
+        Returns:
+            ``(path, reason)`` pairs in TOC order; empty when every listed file loaded or
+            the addon is not loaded.
+
+        Failure modes:
+            None.
+        """
+        for addon in self._loaded_addons:
+            if addon.name == addon_name:
+                return addon.skipped
+        return ()
+
     def _record_error(self, message: Any, stack: Any = "") -> None:
         self.errors.append(
             LuaErrorRecord(
@@ -1965,7 +1994,11 @@ class SimulatedClient:
                     self._restore_saved_variable(var, self.account_saved_variables)
                 elif var in self.character_saved_variables:
                     self._restore_saved_variable(var, self.character_saved_variables)
-        record = _LoadedAddon(name=addon_name, path=addon_dir, toc=loaded_toc)
+        # [2026-11-24 T-064] Only the files the Forever client would load: inline TOC
+        # conditions are judged for its game types and an enUS client, the locale this
+        # headless world models. Skipped files are kept on the record, never dropped quietly.
+        files_to_load, skipped = loaded_toc.files_loaded(locale=_HEADLESS_LOCALE)
+        record = _LoadedAddon(name=addon_name, path=addon_dir, toc=loaded_toc, skipped=skipped)
         for position, existing in enumerate(self._loaded_addons):
             if existing.name == addon_name:
                 self._loaded_addons[position] = record
@@ -1976,7 +2009,7 @@ class SimulatedClient:
         # file of this addon and by no other addon: that sharing boundary is
         # exactly the contract `local addonName, ns = ...` relies on.
         namespace_table = self._runtime.table()
-        for relative_file in loaded_toc.files:
+        for relative_file in files_to_load:
             if not relative_file.lower().endswith(".lua"):
                 continue
             file_path = self._fs.join(addon_dir, *relative_file.split("/"))

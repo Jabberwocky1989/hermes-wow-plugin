@@ -123,6 +123,22 @@ tag, choose the owing one.
 <!-- Real entries accumulate below, NEWEST AT THE TOP. The top entries are
      session-start required reading (count: AGENTS.md → Session ritual). -->
 
+## 2026-11-24 — T-064 opened while T-061 is still DOING  [process]
+- Task: T-064 / T-061
+- What: T-064 was queued, claimed and worked while T-061 is still `[~]`, against "Never open a second task while one is genuinely `[~]`". Both tasks' changes sit uncommitted in the same working tree; `check.py` carries hunks from both.
+- Why: The owner of this clone asked for both review findings to be fixed now. T-061's code is finished; only its CI Accept item is still open, and that needs an owner-approved push.
+- Where: `TASKS.md`; `src/wow_addon_forge/check.py` (T-061: `path_is_under` in `run_addon_tests`; T-064: the `files_loaded` filter before stage 2).
+- Plan: AGENTS.md task loop (one open task) → kept as two tasks with two commits. T-061 commits first, with only its `check.py` hunk staged; T-064 commits second. docs/PLAN.md not falsified.
+- Commit(s): this commit
+
+## 2026-11-24 — Inline TOC conditions and Windows-reserved names found reading the live install  [extra]
+- Task: T-064
+- What: Unplanned. `parse_toc` takes inline `[AllowLoad…]` / `[ExcludeLoad…]` directives off file lines and keeps them per file. One rule set (`file_skip_reason`) decides which files Forever loads; the headless loader and `wow_check`'s Lua stages use it. `lint_toc` warns `unknown-inline-directive` and `windows-reserved-name`, and `wow_new` refuses Windows device names (`bad-name`). Forever matches the game types `forever` and `camelot` and the `mainline` family, per warcraft.wiki.gg "TOC format" (read 2026-11-24). The rule that a list naming only unrecognised types still loads uses the wiki's own game-type table as the recognised set; that is an assumption, not tested in game. Headless judges `AllowLoadTextLocale` against `enUS`.
+- Why: A read-only pass of the plugin's own readers over the live Windows install (T-061 review) found 169 file lines in 8 installed addons that `wow_check` reported as missing. The headless loader skipped those files without saying so, against the "errors are surfaced" standard. Separately, `wow_new` named an addon `NUL` and failed with WinError 3, while `CON`, `AUX` and `COM1` were accepted on Windows 11 build 26300.
+- Where: `src/wow_addon_forge/tocfile.py`, `headless/runtime.py`, `check.py`, `scaffold.py`; `tests/test_tocfile.py`, `test_headless.py`, `test_check.py`, `test_scaffold.py`; `AGENTS.md` foot-gun list.
+- Plan: SPEC-PLUGIN's TOC rules did not mention inline directives → handled. Not covered: inline directives on `##` header lines, the addon-level `## AllowLoadGameType` header, and path variables such as `[TextLocale]`, which still stay in the path unchanged. docs/PLAN.md not falsified.
+- Commit(s): this commit
+
 ## 2026-11-24 — Windows port leaves the dangling-link reinstall and in-game run open  [tech-debt]
 - Task: T-061
 - What: Two known gaps are knowingly left unfixed. (1) A dangling link at the install destination (source moved or deleted after a link-mode install) blocks every later `wow_install` with FileExistsError; it predates T-061 for symlinks on every OS and now also applies to junctions. (2) Nothing was loaded in the Windows game client; Windows evidence is headless plus a read-only `wow_env` run against a live install.

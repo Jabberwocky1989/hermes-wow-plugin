@@ -649,3 +649,27 @@ def test_wow_check_and_wow_test_reject_binary_lua_chunks(
         clients=1,
     )
     assert ok_case is False and "binary chunks are not allowed" in msg_case
+
+
+def _conditional_addon(directive: str) -> tuple[str, dict[str, str]]:
+    base = "/addons/Cond"
+    toc = f"## Interface: 16001\n## Title: Cond\n\nMain.lua\nClassic.lua{directive}\n"
+    return base, {
+        f"{base}/Cond.toc": toc,
+        f"{base}/Main.lua": "CondMain = true\n",
+        f"{base}/Classic.lua": "CondClassic = GetClassicOnlyThing()\n",
+    }
+
+
+def test_check_skips_files_whose_toc_condition_excludes_forever(
+    fake_fs_factory: Any, tmp_path: Path
+) -> None:
+    # [2026-11-24 T-064] Control first: listed plainly, the Classic-only call IS a finding,
+    # so the clean result below proves the condition was honoured, not that nothing ran.
+    base, files = _conditional_addon("")
+    plain = _check(fake_fs_factory, files, base, tmp_path)
+    assert any(item["file"] == "Classic.lua" for item in plain["findings"]), plain
+    base, files = _conditional_addon(" [AllowLoadGameType vanilla, tbc]")
+    payload = _check(fake_fs_factory, files, base, tmp_path)
+    assert payload["verdict"] == "pass", payload["findings"]
+    assert payload["findings"] == []
