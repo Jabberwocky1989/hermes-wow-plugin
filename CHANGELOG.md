@@ -3,6 +3,7 @@
      `<YYYY-MM-DD> — T-<###> — <what changed, user-visible effect>`
      Internal-only tasks get one line ending `(no user-visible change)`. -->
 
+2026-11-24 — T-071 — `wow_api sync` and `status` now report the build the resource lists were dumped from (`resource_build`, read from the resource mirror's README) and warn when it differs from the documentation build; on 2026-11-24 that is 70938 against 71091. This replaces T-067's statement that the build could not be read, which was wrong
 2026-11-24 — T-070 — Corrected the T-065 and T-066 entries below, which claimed more than was checked, and a code comment in the API index (no behaviour change)
 2026-11-24 — T-068 — The wow-addon-builder skill no longer lists `C_UI.Reload` under "old globals are gone": it says `ReloadUI` still exists as a FrameXML helper and `C_UI.Reload` is the documented call
 2026-11-24 — T-067 — `wow_api status` and `sync` now include `resource_lists`, which names the global API, event, enum and other resource files, says they come from Ketho/BlizzardInterfaceResources, and says their build is unknown and may differ from the index's documentation build (on 2026-11-24: 70938 against 71091)

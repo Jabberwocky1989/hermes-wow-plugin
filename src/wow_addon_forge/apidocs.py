@@ -262,6 +262,9 @@ class SourceBundle:
             bundle. Sync results quote it so the user sees which export was indexed.
         resource_origin: [2026-11-24 T-067] Where ``resources`` came from, e.g.
             ``"Ketho/BlizzardInterfaceResources (forever branch)"``; ``""`` when unnamed.
+        resource_build: [2026-11-24 T-071] The client build the resource lists were dumped
+            from, e.g. ``"1.60.1.70938"``, read from the resource mirror's README; None when
+            it could not be read (the reason is in ``warnings``) or there are no resources.
 
     Returns:
         Nothing; this is a data holder.
@@ -278,6 +281,7 @@ class SourceBundle:
     warnings: list[str] = field(default_factory=list)
     origin: str = ""
     resource_origin: str = ""
+    resource_build: str | None = None
 
 
 def normalise_flavor(flavor: object) -> str:
@@ -400,6 +404,9 @@ def fetch_mirror_bundle(fetcher: Fetcher, flavor: str, *, max_workers: int = 16)
         for name in RESOURCE_FILES
     }
     resources = _fetch_many(fetcher, resource_urls, max_workers)
+    resource_build = _read_resource_build(
+        fetcher, f"{_RAW_PREFIX}Ketho/BlizzardInterfaceResources/{branch}/README.md", warnings
+    )
     return SourceBundle(
         flavor=normalised,
         build=build,
@@ -408,7 +415,48 @@ def fetch_mirror_bundle(fetcher: Fetcher, flavor: str, *, max_workers: int = 16)
         resources=resources,
         warnings=warnings,
         resource_origin=f"Ketho/BlizzardInterfaceResources ({branch} branch)",
+        resource_build=resource_build,
     )
+
+
+# [2026-11-24 T-071] The resource mirror's README records the dump's client build as a
+# line `GetBuildInfo() => "1.60.1", "70938", "Nov 12 2026", 16001` (version, build number,
+# date, interface), rewritten in every build commit (checked on the forever branch,
+# 2026-11-24). Version and build number join into the dotted form version.txt uses.
+_README_BUILD = re.compile(r'GetBuildInfo\(\)\s*=>\s*"(\d+(?:\.\d+){1,3})"\s*,\s*"(\d+)"')
+
+
+def _read_resource_build(fetcher: Fetcher, url: str, warnings: list[str]) -> str | None:
+    """Read the resource lists' client build from the resource mirror's README.
+
+    Why this exists:
+        [2026-11-24 T-071] The index is labelled with the documentation build, while its
+        resource lists come from a second mirror that can lag it (70938 against 71091 on
+        2026-11-24). The build is only worth comparing if it is read, not assumed.
+
+    Args:
+        fetcher: The bundle's ``Fetcher``.
+        url: The README's raw URL.
+        warnings: The bundle's warning list; a failed read or parse appends one line.
+
+    Returns:
+        The dotted build, e.g. ``"1.60.1.70938"``, or None when the README cannot be
+        fetched or has no ``GetBuildInfo()`` line.
+
+    Failure modes:
+        None raised: the README only labels the lists, so failing to read it must not fail
+        a sync whose data fetched fine. Each failure is a warning instead.
+    """
+    try:
+        text = fetcher.fetch_text(url)
+    except ApiIndexError as exc:
+        warnings.append(f"Resource lists' build is unknown: README.md could not be read ({exc}).")
+        return None
+    match = _README_BUILD.search(text)
+    if match is None:
+        warnings.append("Resource lists' build is unknown: README.md has no GetBuildInfo() line.")
+        return None
+    return f"{match.group(1)}.{match.group(2)}"
 
 
 # [2026-11-11 T-044] A client export is the tree `ExportInterfaceFiles code` writes
@@ -1081,23 +1129,21 @@ def _run_lua_enum(runtime: Any, bundle: SourceBundle, warnings: list[str]) -> tu
 
 
 def describe_resource_lists(bundle: SourceBundle) -> str | None:
-    """Say where an index's resource lists came from and that their build is unknown.
+    """Say where an index's resource lists came from and which build they are.
 
     Why this exists:
         [2026-11-24 T-067] An index is labelled with the documentation build
         (``version.txt`` on the Gethe mirror), but its global API, event, enum, FrameXML,
         widget, template and mixin lists come from Ketho/BlizzardInterfaceResources, which
-        publishes its build only in commit messages. Those are on ``api.github.com``, a
-        host the fetcher refuses (only ``raw.githubusercontent.com`` passes), so the lists'
-        build cannot be read. On 2026-11-24 the two mirrors stood at 71091 and 70938.
-        Saying so beats a single build label that silently covers both.
+        can lag it. [2026-11-24 T-071] Their build is now read from that mirror's README
+        (``bundle.resource_build``); T-067 had wrongly said no fetched file carried it.
 
     Args:
         bundle: The bundle the index is built from.
 
     Returns:
-        One sentence naming the resource files and their origin and saying their build is
-        unknown, or None when the bundle has no resource lists (a client export).
+        One sentence naming the resource files, their origin and their build (or saying the
+        build is unknown), or None when the bundle has no resource lists (a client export).
 
     Failure modes:
         None.
@@ -1105,9 +1151,17 @@ def describe_resource_lists(bundle: SourceBundle) -> str | None:
     if not bundle.resources:
         return None
     origin = bundle.resource_origin or "an unnamed source"
+    files = ", ".join(sorted(bundle.resources))
+    if bundle.resource_build is None:
+        return (
+            f"{files} came from {origin}; their build could not be read, so they may be "
+            f"from a different build than {bundle.build}."
+        )
+    if bundle.resource_build == bundle.build:
+        return f"{files} came from {origin} at build {bundle.resource_build}, the same build."
     return (
-        f"{', '.join(sorted(bundle.resources))} came from {origin}, which publishes no "
-        f"build number in its files; they may be from a different build than {bundle.build}."
+        f"{files} came from {origin} at build {bundle.resource_build}; the documentation "
+        f"is from build {bundle.build}."
     )
 
 
@@ -1138,6 +1192,18 @@ def build_index(bundle: SourceBundle, *, generated_at: float) -> dict[str, Any]:
         documented entries.
     """
     warnings: list[str] = list(bundle.warnings)
+    # [2026-11-24 T-071] Two mirrors, two builds: say so when they differ, because a name
+    # added or removed between them is then missing from, or stale in, the resource lists.
+    if (
+        bundle.resources
+        and bundle.resource_build is not None
+        and bundle.resource_build != bundle.build
+    ):
+        warnings.append(
+            f"Resource lists are from build {bundle.resource_build}; the documentation is "
+            f"from build {bundle.build}. Undocumented names added or removed between the two "
+            "builds may be missing or stale."
+        )
     entries: dict[str, dict[str, dict[str, Any]]] = {kind: {} for kind in KINDS}
     widgets: dict[str, Any] = {}
     runtime = luavm.new_runtime()
@@ -1184,6 +1250,7 @@ def build_index(bundle: SourceBundle, *, generated_at: float) -> dict[str, Any]:
         "generated_at": float(generated_at),
         "documentation_files": len(bundle.documentation),
         "resource_lists": describe_resource_lists(bundle),
+        "resource_build": bundle.resource_build if bundle.resources else None,
         "counts": {kind: len(entries[kind]) for kind in KINDS},
         "warnings": warnings,
         "widgets": widgets,
@@ -1271,7 +1338,8 @@ class ApiIndex:
             ``generated_at_utc`` (ISO 8601 UTC, seconds, ending ``"Z"``), ``age_seconds``
             (never negative), ``documentation_files``, ``resource_lists`` (see
             ``describe_resource_lists``; None for an export or an index built before
-            T-067), ``counts``, ``warning_count``,
+            T-067), ``resource_build`` (T-071; None when unknown, for an export, or an index
+            built before T-071), ``counts``, ``warning_count``,
             ``warnings`` (first 20) and ``warnings_truncated``.
 
         Failure modes:
@@ -1306,6 +1374,7 @@ class ApiIndex:
             "age_seconds": max(0, int(now - generated)),
             "documentation_files": self._data.get("documentation_files"),
             "resource_lists": self._data.get("resource_lists"),
+            "resource_build": self._data.get("resource_build"),
             "counts": counts,
             "warning_count": len(all_warnings),
             "warnings": all_warnings[:20],

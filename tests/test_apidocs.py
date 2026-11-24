@@ -235,6 +235,17 @@ _TOC = (
 _GETHE = "https://raw.githubusercontent.com/Gethe/wow-ui-source/forever"
 _KETHO = "https://raw.githubusercontent.com/Ketho/BlizzardInterfaceResources/forever/Resources"
 _DOC_DIR = f"{_GETHE}/Interface/AddOns/Blizzard_APIDocumentationGenerated"
+_KETHO_README = (
+    "https://raw.githubusercontent.com/Ketho/BlizzardInterfaceResources/forever/README.md"
+)
+
+
+def _readme(version: str, build: str) -> str:
+    """Return a README shaped like the resource mirror's (checked 2026-11-24)."""
+    return (
+        "# BlizzardInterfaceResources\n```lua\n"
+        f'GetBuildInfo() => "{version}", "{build}", "Nov 12 2026", 16001\n```\n'
+    )
 
 
 def fixture_bundle() -> SourceBundle:
@@ -258,6 +269,9 @@ def fixture_mirror_files() -> dict[str, str]:
         files[f"{_DOC_DIR}/{name}"] = text
     for name, text in _RESOURCES.items():
         files[f"{_KETHO}/{name}"] = text
+    # [2026-11-24 T-071] The resource mirror's README carries the dump's build; the
+    # fixture states the same build as version.txt, so the default case is "equal".
+    files[_KETHO_README] = _readme("1.60.1", "70888")
     return files
 
 
@@ -910,19 +924,53 @@ def test_ze_enum_with_its_own_metatable_is_left_alone_and_warned() -> None:
     )
 
 
-def test_zf_status_says_where_resource_lists_came_from_and_build_is_unknown() -> None:
-    """ZF: a mirror index names the resource lists' origin and says their build is unknown."""
+def test_zf_resource_build_read_from_readme_equal_build() -> None:
+    """ZF: the README's build is recorded; equal builds add no warning."""
     bundle = fetch_mirror_bundle(FakeFetcher(fixture_mirror_files()), "forever")
     assert bundle.resource_origin == "Ketho/BlizzardInterfaceResources (forever branch)"
+    assert bundle.resource_build == "1.60.1.70888"
+    assert bundle.warnings == []
     data = build_index(bundle, generated_at=GENERATED_AT)
     status = ApiIndex(data).status(now=GENERATED_AT)
+    assert status["resource_build"] == "1.60.1.70888"
     described = status["resource_lists"]
     assert isinstance(described, str)
     assert "GlobalAPI.lua" in described and "LuaEnum.lua" in described
-    assert "from Ketho/BlizzardInterfaceResources (forever branch)" in described
-    assert "publishes no build number" in described
-    assert "different build than 1.60.1.70888" in described
-    # A canned bundle with resources but no named origin still says the build is unknown.
+    assert "Ketho/BlizzardInterfaceResources (forever branch) at build 1.60.1.70888" in described
+    assert not any("Resource lists" in warning for warning in data["warnings"])
+
+
+def test_zh_resource_build_differing_from_documentation_is_a_warning() -> None:
+    """ZH: a resource build older than version.txt is named in a warning and the status."""
+    files = fixture_mirror_files()
+    files[_KETHO_README] = _readme("1.60.1", "70800")
+    bundle = fetch_mirror_bundle(FakeFetcher(files), "forever")
+    data = build_index(bundle, generated_at=GENERATED_AT)
+    assert data["resource_build"] == "1.60.1.70800"
+    assert any(
+        warning.startswith("Resource lists are from build 1.60.1.70800; the documentation")
+        and "1.60.1.70888" in warning
+        for warning in data["warnings"]
+    )
+    assert "the documentation is from build 1.60.1.70888" in str(data["resource_lists"])
+
+
+def test_zi_unreadable_or_unparsable_readme_means_unknown_with_a_warning() -> None:
+    """ZI: a missing README or one without GetBuildInfo() leaves the build unknown, warned."""
+    missing = fixture_mirror_files()
+    del missing[_KETHO_README]
+    bundle = fetch_mirror_bundle(FakeFetcher(missing), "forever")
+    assert bundle.resource_build is None
+    assert any("README.md could not be read" in warning for warning in bundle.warnings)
+    data = build_index(bundle, generated_at=GENERATED_AT)
+    assert data["resource_build"] is None
+    assert "their build could not be read" in str(data["resource_lists"])
+    garbled = fixture_mirror_files()
+    garbled[_KETHO_README] = "# BlizzardInterfaceResources\nno build line here\n"
+    bundle = fetch_mirror_bundle(FakeFetcher(garbled), "forever")
+    assert bundle.resource_build is None
+    assert any("has no GetBuildInfo() line" in warning for warning in bundle.warnings)
+    # A canned bundle with resources but no origin or build still says so.
     assert "an unnamed source" in str(built_data()["resource_lists"])
 
 

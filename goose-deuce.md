@@ -123,6 +123,14 @@ tag, choose the owing one.
 <!-- Real entries accumulate below, NEWEST AT THE TOP. The top entries are
      session-start required reading (count: AGENTS.md → Session ritual). -->
 
+## 2026-11-24 — T-067's "no build in its files" was false; T-069 dropped  [process]
+- Task: T-071 (corrects T-067; drops T-069)
+- What: T-067 shipped the statement that Ketho/BlizzardInterfaceResources "publishes no build number in its files" (sync text, `describe_resource_lists` docstring, the goose-deuce entry "T-067 says the resource build is unknown instead of comparing it", and T-069's Why). Its README.md, on the already-allowed `raw.githubusercontent.com`, carries `GetBuildInfo() => "1.60.1", "70938", …` and changes in every build commit; a cold audit found it. T-071 reads the build from the README and warns when it differs from the documentation build, which is T-067's original Accept. T-067's test `test_zf_…build_is_unknown` pinned the false text and was replaced by three stronger tests (equal, different, unreadable or unparsable). T-069 (allow `api.github.com`) is dropped: the build is readable without a second host.
+- Why: T-067 searched only the `Resources/` files' first lines and took "not found there" as "not published".
+- Where: `src/wow_addon_forge/apidocs.py` (`_read_resource_build`, `describe_resource_lists`, `build_index`); `tests/test_apidocs.py`; `TASKS.md`.
+- Plan: T-067 Accept (name the build, warn on a difference) → now met by T-071; the earlier entry's "neither case can occur" is false. docs/PLAN.md not falsified.
+- Commit(s): this commit
+
 ## 2026-11-24 — Records from T-064 to T-066 overclaimed; corrected  [process]
 - Task: T-070 (corrects T-064, T-065, T-066)
 - What: A cold audit found shipped records asserting unexercised behaviour, against AGENTS.md's honesty bound. (1) The T-065 CHANGELOG line said the four unit calls go secret "while a restriction is active, as the 1.60.1 index documents"; the index ties each to a specific condition and only the simulator uses any restriction. (2) The T-066 CHANGELOG line said "as the live client provides them", and its code comment called MinValue/MaxValue "assumed from their names, not observed" when the Gethe documentation states them per enumeration. (3) The T-064 commit body's `Docs:` line omits goose-deuce.md, which that commit changed. (4) A stray blank line in CHANGELOG.md. Fixed: (1), (2) and (4) are corrected in place with a T-070 CHANGELOG line saying so; the measured match (880 of 887 enums on 71091, 7 named) replaces the guess. (3) stays: AGENTS.md forbids rewriting history, so this entry is the correction.
