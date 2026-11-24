@@ -14,6 +14,8 @@ Invariants owned by this file:
   would, and writes nothing.
 - A symlink or junction destination is unlinked, never ``rmtree``'d, so replacing a
   link cannot delete the source tree. (Junction clause added 2026-11-24, T-061.)
+- A dangling link at the destination (its target gone) is removed without a backup and
+  the result's ``note`` says so; it never blocks an install. (Added 2026-11-24, T-062.)
 """
 
 from __future__ import annotations
@@ -174,6 +176,10 @@ class InstallWriter(Protocol):
 
     def is_file(self, path: str) -> bool:
         """Return whether ``path`` is an existing file."""
+        ...
+
+    def is_link(self, path: str) -> bool:
+        """Return whether ``path`` is a symlink or junction, even one whose target is gone."""
         ...
 
     def read_text(self, path: str) -> str:
@@ -369,11 +375,21 @@ def install_addon(
             _TRAVERSAL_HINT,
         )
     existed = fs.is_dir(dest)
+    # [2026-11-24 T-062] is_dir follows links, so a link whose source folder was moved or
+    # deleted reads as "nothing there", yet the name is taken and every write failed with
+    # FileExistsError. Such a link holds no files to back up: it is removed and reported.
+    dangling = not existed and writer.is_link(dest)
     action, note = client_action(
         existed=existed,
         old_files=_toc_files(fs, dest, name) if existed else None,
         new_files=_toc_files(fs, source, name),
     )
+    if dangling:
+        verb = "would replace" if dry_run else "replaced"
+        note += (
+            f"; {verb} a dangling link at the destination (its target folder no longer "
+            "exists, so there is nothing to back up)"
+        )
     backup = _backup_path(data_dir, name, clock, fs) if existed else None
     if dry_run:
         return {
@@ -387,6 +403,8 @@ def install_addon(
         }
     if existed and backup is not None:
         writer.copy_backup(dest, backup)
+        writer.remove_dest(dest)
+    elif dangling:
         writer.remove_dest(dest)
     if mode == "link":
         writer.link_dir(source, dest)
@@ -418,6 +436,15 @@ class RealInstallWriter:
     def is_file(self, path: str) -> bool:
         """Return whether ``path`` is an existing file."""
         return Path(path).is_file()
+
+    def is_link(self, path: str) -> bool:
+        """Return whether ``path`` is a symlink or junction, without following it.
+
+        [2026-11-24 T-062] Both checks read the entry itself (``lstat``), so a link whose
+        target is gone still answers ``True``; junctions need their own check because
+        ``Path.is_symlink()`` is ``False`` for them.
+        """
+        return Path(path).is_symlink() or is_junction(path)
 
     def read_text(self, path: str) -> str:
         """Return a file's UTF-8 text."""

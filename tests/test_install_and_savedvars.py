@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -254,6 +255,70 @@ def test_install_replaces_an_addon_holding_read_only_files(tmp_path: Path) -> No
     assert not (dest / ".git").exists()
     assert (dest / "Core.lua").read_text(encoding="utf-8") == _CLEAN_LUA
     assert Path(replaced["backup"], ".git", "objects", "ab", "cdef").is_file()
+
+
+def _symlinks_allowed(tmp_path: Path) -> bool:
+    # [2026-11-24 T-062] Windows without Developer Mode or admin cannot make symlinks at
+    # all (WinError 1314); the junction test below covers that machine instead.
+    probe = tmp_path / "symlink-probe"
+    try:
+        os.symlink(tmp_path, probe, target_is_directory=True)
+    except OSError:
+        return False
+    probe.unlink()
+    return True
+
+
+def _assert_dangling_link_replaced(tmp_path: Path, wow: Path, source: Path) -> None:
+    # [2026-11-24 T-062] Shared tail of the dangling-link tests: the link install has
+    # happened and its source is deleted. Before T-062, fs.is_dir(dest) followed the
+    # dead link to False, so nothing was removed and every install failed with
+    # FileExistsError (WinError 183 on Windows).
+    tools = _tools(tmp_path, wow)
+    dest = wow / "_forever_" / "Interface" / "AddOns" / "Clean"
+    shutil.rmtree(source)
+    assert not dest.exists()
+    assert dest.is_symlink() or is_junction(str(dest))
+    dry = _install(tools, path=str(_clean(tmp_path / "other")), dry_run=True)
+    assert dry["ok"] is True, dry
+    assert dry["backup"] is None
+    assert "would replace a dangling link" in dry["note"]
+    assert dest.is_symlink() or is_junction(str(dest))
+    replaced = _install(tools, path=str(_clean(tmp_path / "other")))
+    assert replaced["ok"] is True, replaced
+    assert replaced["backup"] is None
+    assert replaced["action"] == "restart"
+    assert "; replaced a dangling link" in replaced["note"]
+    assert not dest.is_symlink()
+    assert not is_junction(str(dest))
+    assert (dest / "Core.lua").read_text(encoding="utf-8") == _CLEAN_LUA
+    assert not (tmp_path / "backups").exists()
+
+
+def test_reinstall_replaces_a_dangling_symlink(tmp_path: Path) -> None:
+    if not _symlinks_allowed(tmp_path):
+        pytest.skip("this account cannot create symlinks; the junction test covers it")
+    wow = _wow(tmp_path)
+    source = _clean(tmp_path)
+    linked = _install(_tools(tmp_path, wow), path=str(source), mode="link")
+    assert linked["ok"] is True, linked
+    assert Path(linked["dest"]).is_symlink()
+    _assert_dangling_link_replaced(tmp_path, wow, source)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="directory junctions are Windows-only")
+def test_reinstall_replaces_a_dangling_junction(tmp_path: Path, monkeypatch: Any) -> None:
+    def refuse_symlink(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError(None, "A required privilege is not held by the client", None, 1314)
+
+    wow = _wow(tmp_path)
+    source = _clean(tmp_path)
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "symlink", refuse_symlink)
+        linked = _install(_tools(tmp_path, wow), path=str(source), mode="link")
+    assert linked["ok"] is True, linked
+    assert is_junction(linked["dest"])
+    _assert_dangling_link_replaced(tmp_path, wow, source)
 
 
 def test_is_junction_is_false_for_plain_entries(tmp_path: Path) -> None:

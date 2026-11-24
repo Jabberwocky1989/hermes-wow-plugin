@@ -123,6 +123,14 @@ tag, choose the owing one.
 <!-- Real entries accumulate below, NEWEST AT THE TOP. The top entries are
      session-start required reading (count: AGENTS.md → Session ritual). -->
 
+## 2026-11-24 — T-062 picked before its dependency T-061 closed  [process]
+- Task: T-062 / T-061
+- What: T-062 (`Depends: T-061`) was claimed and closed while T-061 is still `[~]`. That breaks PICK's rule that every dependency is `[x]` and the one-open-task rule. The symlink half of the regression test skips on an account that cannot create symlinks (Windows without Developer Mode or admin); the task said "for a symlink on every OS". On such an account the junction test covers the same path.
+- Why: The owner asked for T-062 directly. T-061's code is committed (the dependency was on its junction code); only its CI run is still open, and that waits on the owner enabling Actions on the fork. A symlink cannot be made on such an account, so the test cannot run there.
+- Where: `TASKS.md`; `tests/test_install_and_savedvars.py` (`_symlinks_allowed`).
+- Plan: AGENTS.md task loop (PICK) → T-062 closed in its own commit on top of T-061 and T-064. docs/PLAN.md not falsified.
+- Commit(s): this commit
+
 ## 2026-11-24 — T-064 opened while T-061 is still DOING  [process]
 - Task: T-064 / T-061
 - What: T-064 was queued, claimed and worked while T-061 is still `[~]`, against "Never open a second task while one is genuinely `[~]`". Both tasks' changes sit uncommitted in the same working tree; `check.py` carries hunks from both.

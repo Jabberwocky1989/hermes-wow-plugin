@@ -17,10 +17,6 @@
       Touches: `scripts/discord_bridge.py`, `tests/`, `TASKS.md`, `CHANGELOG.md`   Depends: T-023   Gated: none
 
 ## Later
-- [ ] T-062 — wow_install: clear a dangling link at the destination
-      Why: After a link-mode install whose source folder is later moved or deleted, `fs.is_dir(dest)` is False (it follows the link), so no backup or removal happens and every later install fails with FileExistsError (WinError 183 on Windows). Pre-existing for symlinks on every OS; T-061's junctions inherit it (goose-deuce.md 2026-11-24 "Windows port leaves the dangling-link reinstall and in-game run open").
-      Accept: Against a temporary install: link-install, delete the source, install again → `ok: true`, the dangling link replaced, no backup of the dangling link; a test proves it for a symlink on every OS and for a junction on Windows, and fails on the pre-fix code. Full gate green.
-      Touches: `src/wow_addon_forge/install.py`, `tests/test_install_and_savedvars.py`, `CHANGELOG.md`, `TASKS.md`   Depends: T-061   Gated: none
 - [ ] T-063 — In-game acceptance on Windows
       Why: T-061 proved the plugin on Windows headlessly and against the install folder only; nothing has loaded in the Windows game client (AGENTS.md: live-client claims need an in-game run).
       Accept: On Windows, `wow_install` (copy mode, then link mode via a junction) installs ForgeProbe; the client lists and loads it; `wow_errors` reads its ring back; results recorded in `docs/INGAME-CHECKLIST.md` with platform named.
@@ -87,6 +83,10 @@
 ## Dropped
 
 ## Done
+- [x] T-062 — wow_install: clear a dangling link at the destination (2026-11-24, this commit)
+      Why: After a link-mode install whose source folder is later moved or deleted, `fs.is_dir(dest)` is False (it follows the link), so no backup or removal happens and every later install fails with FileExistsError (WinError 183 on Windows). Pre-existing for symlinks on every OS; T-061's junctions inherit it (goose-deuce.md 2026-11-24 "Windows port leaves the dangling-link reinstall and in-game run open").
+      Accept: Against a temporary install: link-install, delete the source, install again → `ok: true`, the dangling link replaced, no backup of the dangling link; a test proves it for a symlink on every OS and for a junction on Windows, and fails on the pre-fix code. Full gate green.
+      Touches: `src/wow_addon_forge/install.py`, `tests/test_install_and_savedvars.py`, `CHANGELOG.md`, `TASKS.md`, `goose-deuce.md`   Depends: T-061   Gated: none
 - [x] T-064 — Read inline TOC conditions and refuse Windows-reserved addon names (2026-11-24, this commit)
       Why: Reading the live Windows install during T-061 found 169 TOC file lines in 8 installed addons ending in an inline directive such as `[AllowLoadGameType mainline]`, which `wow_check` reported as missing files and the headless loader silently skipped; and `wow_new` accepted addon names Windows reserves for devices (`NUL` cannot be created there; `CON`, `AUX`, `COM1` are refused by Windows versions that still reserve them).
       Accept: `parse_toc` strips inline `[AllowLoad…]` / `[ExcludeLoad…]` directives from file lines and keeps them per file; `lint_toc` checks the bare path and warns `unknown-inline-directive` for an unrecognised one; the headless loader and `wow_check`'s Lua stages use only files whose conditions admit WoW: Forever (game types `forever`, `camelot`, family `mainline`), and the loader records each skipped file with its reason; `wow_new` refuses `CON`, `PRN`, `AUX`, `NUL`, `COM0`–`COM9`, `LPT0`–`LPT9` (any case) with `bad-name`, and `lint_toc` warns `windows-reserved-name` for such a folder or listed path segment on every OS; the new tests fail against the pre-change code; full gate green, mypy clean for win32, linux and darwin.
