@@ -75,8 +75,12 @@ return collector
 
 # [2026-11-24 T-066] Documentation files read companion Enum.XMeta tables that exist only
 # in the running client: LFGConstantsDocumentation.lua sets LFG_ROLE_ANY =
-# Enum.LFGRoleMeta.NumValues. MinValue and MaxValue are derived as well; that the client's
-# Meta tables carry those two fields is assumed from their names, not observed.
+# Enum.LFGRoleMeta.NumValues. MinValue and MaxValue are derived as well.
+# [2026-11-24 T-070] Measured on build 1.60.1.71091: the Gethe documentation states
+# NumValues/MinValue/MaxValue for 900 enumerations; 887 of them are in LuaEnum.lua, and
+# this derivation matches 880. It differs for CooldownViewerCategory (derived 11/-2/8,
+# documented 9/0/8) and the six Discord*ID enums (derived 0/nil/nil, documented 1/0/0);
+# no documentation file reads those seven Meta tables, so the index is unaffected.
 # Ketho's LuaEnum.lua does not write the Meta tables, so that file failed on every sync
 # and the index lost LFGRoles, LFG_ROLE_NO_ROLE and LFG_ROLE_ANY. This __index derives
 # XMeta from Enum.X on first read. It is installed after Enum is converted to Python and

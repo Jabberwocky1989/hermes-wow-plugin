@@ -13,6 +13,19 @@
       Touches: `scripts/discord_bridge.py`, `tests/`, `TASKS.md`, `CHANGELOG.md`   Depends: T-023   Gated: none
 
 
+- [ ] T-071 — API index: read the Ketho resources' build from its README and compare
+      Why: T-067 said the resource lists' build cannot be read, but Ketho/BlizzardInterfaceResources' README.md (on `raw.githubusercontent.com`, already allowed) carries `GetBuildInfo() => "1.60.1", "70938", …` and is updated in every build commit; the sync text "publishes no build number in its files" is false.
+      Accept: `wow_api sync` and `status` record the resource lists' build from the README; a warning names both builds when it differs from the documentation build; an unreadable or missing README says unknown and warns; hermetic tests cover equal, different and unreadable and fail against the pre-change code; a live sync shows 70938 against 71091 (or whatever both mirrors then hold); T-069 is dropped; full gate green.
+      Touches: `src/wow_addon_forge/apidocs.py`, `tests/test_apidocs.py`, `CHANGELOG.md`, `TASKS.md`, `goose-deuce.md`   Depends: none   Gated: none
+- [ ] T-072 — wow_check and wow_test report files their TOC conditions exclude
+      Why: T-064 drops condition-excluded files from `wow_check` without a finding, and the headless loader's `skipped_files` record has no caller, so a user never sees that a listed file was not checked or loaded (AGENTS.md: nothing silent).
+      Accept: `wow_check` reports each excluded file as an `info` finding with its path and reason, without changing the verdict; the `wow_test` result lists each excluded file with its reason; tests fail against the pre-change code; full gate green.
+      Touches: `src/wow_addon_forge/check.py`, `src/wow_addon_forge/tools.py`, `tests/test_check.py`, `tests/test_tools.py`, `CHANGELOG.md`, `TASKS.md`   Depends: none   Gated: none
+- [ ] T-073 — TOC: the rest of the inline syntax the wiki documents
+      Why: `parse_toc` keeps `[LoadIntoEnvironment …]`, `[Bootstrap]` and the path variables `[Family]`, `[Game]`, `[TextLocale]`, `[RegionalTextLocale]` as part of the file name, so `wow_check` reports real files as missing (an error); inline directives on `##` lines stay inside the header value; a line holding only a directive vanishes without a finding (warcraft.wiki.gg "TOC format", read 2026-11-24; goose-deuce.md 2026-11-24 T-064 entry listed some as not covered with no board item).
+      Accept: `LoadIntoEnvironment` and `Bootstrap` are known directives with a stated load rule; `[Family]` and `[Game]` expand to `Mainline` and `Camelot` (Ketho's README dump of the Forever client: `TOC [Family] => "Mainline"`, `TOC [Game] => "Camelot"`); `[TextLocale]` and `[RegionalTextLocale]` expand to the headless locale when loading, and lint accepts the line when a file exists for at least one client locale; directives on `##` lines are stripped from the value and kept; a directive-only line is a lint warning; tests fail against the pre-change code; full gate green.
+      Touches: `src/wow_addon_forge/tocfile.py`, `src/wow_addon_forge/check.py`, `src/wow_addon_forge/headless/runtime.py`, `tests/test_tocfile.py`, `tests/test_headless.py`, `tests/test_check.py`, `CHANGELOG.md`, `TASKS.md`   Depends: none   Gated: none
+
 ## Later
 - [ ] T-069 — API index: read the Ketho resources' build from the commit message
       Why: Ketho/BlizzardInterfaceResources states its build only in commit messages (`1.60.1 (70938)` on 2026-11-24, while the Gethe docs were at 71091); T-067 can only say the build is unknown.
@@ -85,6 +98,10 @@
 ## Dropped
 
 ## Done
+- [x] T-070 — Correct the records the 2026-11-24 audit found overclaiming (2026-11-24, this commit)
+      Why: A cold audit of T-064 to T-068 found records that claim more than was exercised: the T-065 CHANGELOG line says the index makes the four unit calls secret under any restriction (the index names specific conditions; only the simulator uses any restriction); the T-066 comment calls MinValue/MaxValue "assumed, not observed" and its CHANGELOG line says "as the live client provides them" (the Gethe documentation carries NumValues/MinValue/MaxValue per enumeration, so it is checkable); the T-064 commit body's `Docs:` line omits goose-deuce.md; a stray blank line sits in CHANGELOG.md.
+      Accept: The T-065 and T-066 CHANGELOG lines and the `_ENUM_META_CHUNK` comment state only what was checked, with the derivation measured against the documented Meta values of build 1.60.1.71091 (count of matches and the mismatching enums named); the stray CHANGELOG blank line is gone; one goose-deuce.md entry records every correction including the T-064 `Docs:` omission (the commit itself is not rewritten); full gate green.
+      Touches: `CHANGELOG.md`, `src/wow_addon_forge/apidocs.py` (comment only), `goose-deuce.md`, `TASKS.md`   Depends: none   Gated: none
 - [x] T-068 — Skill: correct the "old globals are gone" line (2026-11-24, this commit)
       Why: `SKILL.md` lists `C_UI.Reload` under "Old globals are gone", but `ReloadUI` is still in the 1.60.1.71091 index.
       Accept: The line names only replacements whose old global is absent from the current index, or says `ReloadUI` still exists; `wow_api lookup` run for each named old global confirms it; `tests/test_cli_and_skill.py` passes; full gate green.
