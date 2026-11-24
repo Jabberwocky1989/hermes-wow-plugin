@@ -12,10 +12,6 @@
       Accept: `scripts/discord_bridge.py poll|once` POSTs each new outbox record to a Discord incoming webhook, and `send` pushes a Discord-sourced post into `Inbox.lua` for the addon to apply on `/reload`; the webhook URL is read from `$GUILDHALL_DISCORD_WEBHOOK` (or `--webhook`) and is never committed. Live: a board post appears in the channel, and a `send` appears on the board after `/reload`. A unit test covers the webhook POST and the record shape against a mocked HTTP layer. Full gate green.
       Touches: `scripts/discord_bridge.py`, `tests/`, `TASKS.md`, `CHANGELOG.md`   Depends: T-023   Gated: none
 
-- [ ] T-068 — Skill: correct the "old globals are gone" line
-      Why: `SKILL.md` lists `C_UI.Reload` under "Old globals are gone", but `ReloadUI` is still in the 1.60.1.71091 index.
-      Accept: The line names only replacements whose old global is absent from the current index, or says `ReloadUI` still exists; `wow_api lookup` run for each named old global confirms it; `tests/test_cli_and_skill.py` passes; full gate green.
-      Touches: `skills/wow-addon-builder/SKILL.md`, `CHANGELOG.md`, `TASKS.md`   Depends: none   Gated: none
 
 ## Later
 - [ ] T-069 — API index: read the Ketho resources' build from the commit message
@@ -89,6 +85,10 @@
 ## Dropped
 
 ## Done
+- [x] T-068 — Skill: correct the "old globals are gone" line (2026-11-24, this commit)
+      Why: `SKILL.md` lists `C_UI.Reload` under "Old globals are gone", but `ReloadUI` is still in the 1.60.1.71091 index.
+      Accept: The line names only replacements whose old global is absent from the current index, or says `ReloadUI` still exists; `wow_api lookup` run for each named old global confirms it; `tests/test_cli_and_skill.py` passes; full gate green.
+      Touches: `skills/wow-addon-builder/SKILL.md`, `CHANGELOG.md`, `TASKS.md`   Depends: none   Gated: none
 - [x] T-067 — API index: record the resource lists' own build (2026-11-24, this commit)
       Why: The index is labelled with the Gethe build (71091 on 2026-11-24) while its global API, event, enum and FrameXML lists come from Ketho/BlizzardInterfaceResources at an older build (70938), and nothing says so.
       Accept: `wow_api status` and `sync` carry `resource_lists`, naming the resource files and their origin and saying their build is unknown and may differ from the documentation build; None for a client export and for an index cached before T-067; hermetic tests cover the mirror, export and older-index cases and fail against the pre-change code; full gate green. (Narrowed 2026-11-24: the mirror publishes no build in its files, so there is nothing to compare; goose-deuce.md 2026-11-24 "T-067 says the resource build is unknown instead of comparing it". Reading the real build is T-069.)
