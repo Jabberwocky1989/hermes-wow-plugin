@@ -41,6 +41,8 @@ __all__ = [
     "RESTRICTION_STATE",
     "RESTRICTION_TYPE",
     "SEND_RESULT",
+    "HEADLESS_CLIENT_INTERFACE",
+    "HEADLESS_LOCALE",
     "HeadlessError",
     "LuaErrorRecord",
     "SimulatedClient",
@@ -219,7 +221,10 @@ _ALWAYS_NAMESPACES: tuple[str, ...] = (
 # [2026-11-24 T-064] The client text locale inline `[AllowLoadTextLocale …]` TOC conditions
 # are judged against. The headless world provides no GetLocale, so this only decides which
 # locale-restricted files load; enUS is an assumption, not a modelled client setting.
-_HEADLESS_LOCALE = "enUS"
+HEADLESS_LOCALE = "enUS"
+# [2026-11-24 T-072] The client Interface number the headless loader picks a TOC for;
+# wow_test's skipped-file report reads the same constant so both choose the same TOC.
+HEADLESS_CLIENT_INTERFACE = 16001
 _BUCKET_CAPACITY = 10.0
 _BUCKET_REFILL_PER_SECOND = 1.0
 _MAX_REGISTERED_PREFIXES = 255
@@ -2039,7 +2044,7 @@ class SimulatedClient:
         # [2026-11-11 T-007] The TOC choice mirrors env detection: an Interface
         # match for this client wins, then the base folder TOC, then the first
         # candidate; loading and detection must never read different addons.
-        client_interface = 16001
+        client_interface = HEADLESS_CLIENT_INTERFACE
         for candidate_name, candidate_toc in parsed:
             if client_interface in candidate_toc.interface:
                 return (candidate_name, candidate_toc)
@@ -2101,7 +2106,7 @@ class SimulatedClient:
         # [2026-11-24 T-064] Only the files the Forever client would load: inline TOC
         # conditions are judged for its game types and an enUS client, the locale this
         # headless world models. Skipped files are kept on the record, never dropped quietly.
-        files_to_load, skipped = loaded_toc.files_loaded(locale=_HEADLESS_LOCALE)
+        files_to_load, skipped = loaded_toc.files_loaded(locale=HEADLESS_LOCALE)
         record = _LoadedAddon(name=addon_name, path=addon_dir, toc=loaded_toc, skipped=skipped)
         for position, existing in enumerate(self._loaded_addons):
             if existing.name == addon_name:

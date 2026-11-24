@@ -3,6 +3,7 @@
      `<YYYY-MM-DD> — T-<###> — <what changed, user-visible effect>`
      Internal-only tasks get one line ending `(no user-visible change)`. -->
 
+2026-11-24 — T-072 — `wow_check` and `wow_test` results now list `skipped_files`: each TOC-listed file that an inline condition such as `[AllowLoadGameType vanilla]` excludes, with the reason. Before, such a file was left out of the check and the headless load without a word
 2026-11-24 — T-071 — `wow_api sync` and `status` now report the build the resource lists were dumped from (`resource_build`, read from the resource mirror's README) and warn when it differs from the documentation build; on 2026-11-24 that is 70938 against 71091. This replaces T-067's statement that the build could not be read, which was wrong
 2026-11-24 — T-070 — Corrected the T-065 and T-066 entries below, which claimed more than was checked, and a code comment in the API index (no behaviour change)
 2026-11-24 — T-068 — The wow-addon-builder skill no longer lists `C_UI.Reload` under "old globals are gone": it says `ReloadUI` still exists as a FrameXML helper and `C_UI.Reload` is the documented call

@@ -96,6 +96,11 @@ call returns the whole picture.
 Finding shape: `{severity, code, file, line, message, hint}`. Verdict is `pass`
 only with zero errors.
 
+[2026-11-24 T-072] Both `wow_check` and `wow_test` results also carry
+`skipped_files`: one `{file, reason}` per listed file whose inline TOC conditions
+exclude it (`wow_check`: Forever game types, any locale; `wow_test`: the headless
+enUS client). It is a field, not a finding, and never changes the verdict.
+
 ## 5. API index
 
 Purpose: one queryable truth for "does this exist in this build, what does it
