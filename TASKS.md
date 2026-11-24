@@ -3,6 +3,10 @@
      acceptance criteria are not pickable — sharpen them first. -->
 
 ## Now
+- [~] T-061 — Windows support: test, fix and gate the plugin on Windows — DOING Claude Code 2026-11-24
+      Why: The plugin claimed only macOS and Linux; Windows layouts were handled in code but never run on Windows.
+      Accept: On Windows 11 the full gate passes (pytest with coverage ≥ 85%, ruff check, ruff format --check, mypy) and `hermes plugins validate .` passes; `uv run mypy --platform linux src` and `--platform darwin src` pass; `python -m wow_addon_forge env` finds a live Forever install at the default root; link-mode install works without symlink privilege (junction fallback) and replacing a junction never deletes its source; replacing an addon holding read-only files succeeds on Windows; the CI gate goes green on `windows-latest`, `ubuntu-latest` and `macos-latest` (not yet run: needs an owner-approved push).
+      Touches: `src/wow_addon_forge/env.py`, `src/wow_addon_forge/install.py`, `src/wow_addon_forge/bridge.py`, `src/wow_addon_forge/apidocs.py`, `src/wow_addon_forge/check.py`, `src/wow_addon_forge/tools.py`, `tests/test_install_and_savedvars.py`, `tests/test_windows_paths.py`, `.github/workflows/ci.yml`, `AGENTS.md`, `CHANGELOG.md`, `TASKS.md`, `goose-deuce.md`   Depends: none   Gated: none
 - [ ] T-036 — In-game acceptance of Guildhall
       Why: Headless passes are not in-game passes (LOOP.md rule 9).
       Accept: INGAME-CHECKLIST lines 6–12 carry results from the live client; every FAIL has a task.
@@ -13,6 +17,14 @@
       Touches: `scripts/discord_bridge.py`, `tests/`, `TASKS.md`, `CHANGELOG.md`   Depends: T-023   Gated: none
 
 ## Later
+- [ ] T-062 — wow_install: clear a dangling link at the destination
+      Why: After a link-mode install whose source folder is later moved or deleted, `fs.is_dir(dest)` is False (it follows the link), so no backup or removal happens and every later install fails with FileExistsError (WinError 183 on Windows). Pre-existing for symlinks on every OS; T-061's junctions inherit it (goose-deuce.md 2026-11-24 "Windows port leaves the dangling-link reinstall and in-game run open").
+      Accept: Against a temporary install: link-install, delete the source, install again → `ok: true`, the dangling link replaced, no backup of the dangling link; a test proves it for a symlink on every OS and for a junction on Windows, and fails on the pre-fix code. Full gate green.
+      Touches: `src/wow_addon_forge/install.py`, `tests/test_install_and_savedvars.py`, `CHANGELOG.md`, `TASKS.md`   Depends: T-061   Gated: none
+- [ ] T-063 — In-game acceptance on Windows
+      Why: T-061 proved the plugin on Windows headlessly and against the install folder only; nothing has loaded in the Windows game client (AGENTS.md: live-client claims need an in-game run).
+      Accept: On Windows, `wow_install` (copy mode, then link mode via a junction) installs ForgeProbe; the client lists and loads it; `wow_errors` reads its ring back; results recorded in `docs/INGAME-CHECKLIST.md` with platform named.
+      Touches: `docs/INGAME-CHECKLIST.md`, `TASKS.md`, `CHANGELOG.md`   Depends: T-061   Gated: owner
 - [ ] T-049 — Mirror: remaining Discord commands and outbox kinds
       Why: SPEC-GUILDHALL §10 also promises `event`, `grant` and `approve` inbox commands and sign-up summaries, order requests and Marks milestones in the outbox; T-023 shipped the board round trip and refuses the rest as unsupported (goose-deuce.md 2026-11-11 "Mirror widened Board with an origin tag; remaining §10 surface deferred").
       Accept: Headless: a pushed `event` command creates the event on an officer load and refuses on a member load; `grant` and `approve` follow the Marks officer rules; a sign-up writes a summary line and an approved claim crossing a 50-Mark milestone writes a milestone line. `wow_check` verdict `pass`. Full gate green.

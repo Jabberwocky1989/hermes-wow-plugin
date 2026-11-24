@@ -12,8 +12,8 @@ Invariants owned by this file:
   go to the injected data directory.
 - ``dry_run`` reports the same ``reload`` / ``restart`` action a real install
   would, and writes nothing.
-- A symlink destination is unlinked, never ``rmtree``'d, so replacing a link
-  cannot delete the source tree.
+- A symlink or junction destination is unlinked, never ``rmtree``'d, so replacing a
+  link cannot delete the source tree. (Junction clause added 2026-11-24, T-061.)
 """
 
 from __future__ import annotations
@@ -21,6 +21,8 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import stat
+import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Protocol
@@ -31,6 +33,99 @@ from wow_addon_forge.tocfile import parse_toc
 _NAME_RE = re.compile(r"^[A-Za-z0-9_!-]+$")
 _TRAVERSAL_HINT = "Pass the addon folder path. The destination name is its basename."
 _PATH_HINT = "Pass the path to an existing addon directory containing <Addon>.toc."
+
+
+# [2026-11-24 T-061] Windows error code for "a required privilege is not held by the
+# client": os.symlink raises it without Developer Mode or admin rights.
+_ERROR_PRIVILEGE_NOT_HELD = 1314
+
+
+def is_junction(path: str) -> bool:
+    """Return whether ``path`` is a Windows directory junction (not followed).
+
+    Why this exists: junctions are the privilege-free link ``link_dir`` falls back to on
+        Windows, and ``Path.is_symlink()`` does not report them, so code that must never
+        delete through a link checks this too. ``Path.is_junction()`` is 3.12+ only and
+        the project supports 3.11.
+    Args: path, the path to test.
+    Returns: ``True`` only on Windows for a mount-point reparse point; ``False`` on other
+        systems, for a missing path, and for every other kind of entry.
+    Failure modes: none; an unreadable path gives ``False``.
+    """
+    # [2026-11-24 T-061] if/else on sys.platform, never an early return: mypy narrows on
+    # the platform and, with warn_unreachable, flags code after `return` as dead on the
+    # other OS. An if/else lets it skip the other platform's branch instead.
+    if sys.platform == "win32":
+        try:
+            info = os.lstat(path)
+        except OSError:
+            return False
+        attributes = getattr(info, "st_file_attributes", 0)
+        tag = getattr(info, "st_reparse_tag", 0)
+        return bool(attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT) and (
+            tag == stat.IO_REPARSE_TAG_MOUNT_POINT
+        )
+    else:
+        return False
+
+
+def create_junction(target: str, link: str) -> None:
+    """Create a Windows directory junction at ``link`` pointing to ``target``.
+
+    Why this exists: the link-mode fallback when symlinks need a privilege the user
+        lacks. It calls the Win32 API through the standard library, so no shell
+        command runs (README disclosure: no shell commands).
+    Args: target, an absolute existing directory; link, a path that must not exist.
+    Returns: none.
+    Failure modes: ``OSError`` from Windows, on any other system, or when this Python
+        lacks ``_winapi.CreateJunction``.
+    """
+    if sys.platform == "win32":
+        # [2026-11-24 T-061] _winapi is CPython's private Win32 module; CreateJunction is
+        # present from 3.11 through 3.14 (CPython's own tests use it). If a future Python
+        # drops it, the failure becomes an OSError, which the tool reports as
+        # install-failed instead of crashing.
+        try:
+            import _winapi
+
+            make_junction = _winapi.CreateJunction
+        except (ImportError, AttributeError) as exc:
+            raise OSError(f"directory junctions are unavailable in this Python: {exc}") from exc
+        make_junction(target, link)
+    else:
+        raise OSError("directory junctions exist only on Windows")
+
+
+def _make_writable_and_retry(func: Callable[[str], object], path: str, exc: object) -> None:
+    # [2026-11-24 T-061] shutil.rmtree error hook. On Windows a read-only file (git object
+    # files in a developer's addon clone, files extracted from some archives) cannot be
+    # deleted, and rmtree stops part-way with PermissionError, leaving a half-deleted
+    # addon. Clearing the read-only bit and retrying once is the documented recipe.
+    # onexc passes the exception, onerror (3.11) an exc_info tuple; both are handled.
+    error = exc[1] if isinstance(exc, tuple) else exc
+    if isinstance(error, PermissionError):
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+    elif isinstance(error, BaseException):
+        raise error
+    else:
+        raise OSError(f"could not remove {path}")
+
+
+def _remove_tree(path: Path) -> None:
+    """Delete a directory tree, clearing read-only bits that block deletion on Windows.
+
+    Why this exists: ``shutil.rmtree`` fails on read-only files on Windows.
+    Args: path, a real directory (not a link).
+    Returns: none.
+    Failure modes: ``OSError`` for anything a writable retry cannot fix.
+    """
+    # [2026-11-24 T-061] onexc replaced onerror in 3.12 (onerror is deprecated there);
+    # the project supports 3.11, so the keyword follows the running version.
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=_make_writable_and_retry)
+    else:
+        shutil.rmtree(path, onerror=_make_writable_and_retry)
 
 
 def default_data_dir() -> Path:
@@ -94,11 +189,14 @@ class InstallWriter(Protocol):
         ...
 
     def link_dir(self, source: str, dest: str) -> None:
-        """Point ``dest`` at ``source`` as a directory symlink. ``dest`` must not exist."""
+        """Point ``dest`` at ``source`` as a directory link. ``dest`` must not exist.
+
+        A symlink, or on Windows without symlink privilege a directory junction.
+        """
         ...
 
     def remove_dest(self, path: str) -> None:
-        """Remove ``path``. A symlink is unlinked; a directory tree is deleted."""
+        """Remove ``path``. A symlink or junction is unlinked; a directory tree is deleted."""
         ...
 
     def copy_backup(self, source: str, dest: str) -> None:
@@ -334,20 +432,45 @@ class RealInstallWriter:
         shutil.copytree(source, dest)
 
     def link_dir(self, source: str, dest: str) -> None:
-        """Symlink ``dest`` to the absolute ``source`` directory."""
-        os.symlink(os.path.abspath(source), dest, target_is_directory=True)
+        """Symlink ``dest`` to the absolute ``source`` directory.
+
+        On Windows without Developer Mode or admin rights, creating a symlink fails
+        with ``ERROR_PRIVILEGE_NOT_HELD`` (1314); a directory junction is made
+        instead, which needs no privilege. Python reads files through it as through
+        the folder itself (tested); the live game client reading an addon through a
+        junction has not been run.
+        """
+        target = os.path.abspath(source)
+        try:
+            os.symlink(target, dest, target_is_directory=True)
+        except OSError as exc:
+            # [2026-11-24 T-061] Only the missing-privilege error falls back; any other
+            # failure (dest exists, bad path) is reported as it was. The condition starts
+            # with the platform check so mypy skips this branch on macOS and Linux.
+            if (
+                sys.platform == "win32"
+                and getattr(exc, "winerror", None) == _ERROR_PRIVILEGE_NOT_HELD
+            ):
+                create_junction(target, dest)
+            else:
+                raise
 
     def remove_dest(self, path: str) -> None:
-        """Unlink a symlink; otherwise delete a directory tree or a file.
+        """Unlink a symlink or junction; otherwise delete a directory tree or a file.
 
-        Why a symlink is unlinked only: ``shutil.rmtree`` on a link can delete the
+        Why a link is unlinked only: ``shutil.rmtree`` on a link can delete the
         source tree the link points at, which is the opposite of a backup.
         """
         target = Path(path)
-        if target.is_symlink():
+        if is_junction(path):
+            # [2026-11-24 T-061] Path.is_symlink() is False for a junction on every Python
+            # version, so junctions are checked first; os.rmdir removes the junction
+            # itself and never touches the folder it points at.
+            os.rmdir(path)
+        elif target.is_symlink():
             target.unlink()
         elif target.is_dir():
-            shutil.rmtree(target)
+            _remove_tree(target)
         elif target.exists():
             target.unlink()
 

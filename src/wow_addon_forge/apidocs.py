@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from wow_addon_forge import luavm, tocfile
-from wow_addon_forge.env import FileSystem, detect_installs, hermes_home_dir
+from wow_addon_forge.env import FileSystem, detect_installs, hermes_home_dir, replace_file
 
 SCHEMA_VERSION = 1
 DEFAULT_FLAVOR = "forever"
@@ -1384,7 +1384,7 @@ def _atomic_write_text(path: Path, text: str) -> None:
         # [2026-11-11 T-005] Write-then-replace in the same directory: a crash mid-write can
         # only leave the old index or the whole new one, never a half-written file a later
         # read would mistake for a corrupt sync.
-        os.replace(temp_path, path)
+        replace_file(temp_path, path)
     except BaseException:
         temp_path.unlink(missing_ok=True)
         raise

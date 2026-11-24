@@ -46,7 +46,13 @@ from wow_addon_forge.bridge import (
     push_inbox,
 )
 from wow_addon_forge.check import check_addon, run_addon_tests
-from wow_addon_forge.env import DEFAULT_ROOTS, FileSystem, RealFileSystem, detect_installs
+from wow_addon_forge.env import (
+    DEFAULT_ROOTS,
+    FileSystem,
+    RealFileSystem,
+    detect_installs,
+    example_root,
+)
 from wow_addon_forge.install import (
     InstallError,
     RealInstallWriter,
@@ -655,8 +661,7 @@ class ForgeTools:
             result = error_result(
                 "no-install",
                 "No World of Warcraft install was found. Searched: " + ", ".join(searched),
-                "Pass root with the folder that contains _forever_, for example "
-                "/Applications/World of Warcraft.",
+                f"Pass root with the folder that contains _forever_, for example {example_root()}.",
             )
             result["searched"] = searched
             result["warnings"] = list(report.warnings)

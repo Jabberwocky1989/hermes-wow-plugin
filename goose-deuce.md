@@ -123,6 +123,30 @@ tag, choose the owing one.
 <!-- Real entries accumulate below, NEWEST AT THE TOP. The top entries are
      session-start required reading (count: AGENTS.md → Session ritual). -->
 
+## 2026-11-24 — Windows port leaves the dangling-link reinstall and in-game run open  [tech-debt]
+- Task: T-061
+- What: Two known gaps are knowingly left unfixed. (1) A dangling link at the install destination (source moved or deleted after a link-mode install) blocks every later `wow_install` with FileExistsError; it predates T-061 for symlinks on every OS and now also applies to junctions. (2) Nothing was loaded in the Windows game client; Windows evidence is headless plus a read-only `wow_env` run against a live install.
+- Why: (1) is outside T-061's Windows scope (pre-existing, all OSes) and is filed rather than fixed as a drive-by. (2) needs the owner at the game client; a junction-installed addon loading in game is the open claim.
+- Where: `src/wow_addon_forge/install.py` (`install_addon`, `existed = fs.is_dir(dest)`).
+- Plan: no plan line covered Windows → T-062 (dangling link) and T-063 (in-game Windows acceptance, `Gated: owner`) added to `## Later` in this commit. docs/PLAN.md not falsified.
+- Commit(s): this commit
+
+## 2026-11-24 — Windows support added as an unqueued task; one gate rule added  [process]
+- Task: T-061
+- What: T-061 was created and worked in one session without first being queued, claimed, or run through the session-start ritual, at the request of a local user of a clone (not the upstream owner). AGENTS.md now also requires `mypy --platform linux|darwin|win32` for platform-specific code (version 1.0 → 1.1).
+- Why: The work started as a Windows feasibility question and grew into fixes. The gate rule comes from a real miss: the Windows-only `mypy src` was clean while `mypy --platform linux src` and `--platform darwin src` each reported 3 `[unreachable]` errors in `install.py` (found by an independent verifier run, reproduced in this session), which would have turned macOS and Linux CI red.
+- Where: `AGENTS.md` (version line, Project snapshot platform paragraph), `TASKS.md`.
+- Plan: AGENTS.md task loop (PICK → CLAIM → …) → T-061 now sits in `## Now` as `[~]` DOING; it closes only after its CI Accept runs on all three OSes, which needs an owner-approved push. docs/PLAN.md not falsified.
+- Commit(s): this commit
+
+## 2026-11-24 — Windows support: junction fallback, read-only removal, path and retry fixes  [extra]
+- Task: T-061
+- What: Unplanned Windows port. Link mode falls back to a directory junction (`_winapi.CreateJunction`, CPython-private, present 3.11–3.14) on WinError 1314; `remove_dest` removes junctions with `os.rmdir` and clears read-only bits during `rmtree`; `replace_file` retries `os.replace` on PermissionError (about 0.75 s total); `path_is_under` makes `wow_test` path matching separator-agnostic, case-insensitive on Windows, and boundary-aware; the no-install hint shows the Windows root on Windows; CI adds `windows-latest` with bash steps. A Windows install-discovery lookup via the registry was evaluated and rejected: the test machine's live install wrote no WoW registry key, so the key names could not be confirmed.
+- Why: Windows run of the suite on 2026-11-24: 412/413 passed; the failure was a test whose `Path / "C:Evil"` dropped the drive on Windows. The read-only removal failure was reproduced with WinError 5 on the pre-fix code; the `wow_test` path mismatch with "Test path not found" on the pre-fix code. Using `_winapi` keeps the README promise of no shell commands (`mklink /J` would break it).
+- Where: `src/wow_addon_forge/env.py`, `install.py`, `bridge.py`, `apidocs.py`, `check.py`, `tools.py`; `tests/test_install_and_savedvars.py`, `tests/test_windows_paths.py`; `.github/workflows/ci.yml`.
+- Plan: docs/PLAN.md and AGENTS.md named macOS and Linux only → Windows is now partly claimed (AGENTS.md snapshot, headless and install-folder evidence only). docs/PLAN.md folded at the next sweep.
+- Commit(s): this commit
+
 ## 2026-11-11 — Catalog review sandbox hardening and active-profile cache resolution  [extra]
 - Task: T-060 (`docs/SPEC-PLUGIN.md` §3, §5, §6; catalog PR NousResearch/hermes-agent#154059)
 - What: Three catalog-review changes shipped ahead of T-059's remaining live check: (1) `_SANDBOX_CHUNK` sets `string.dump = nil` and wraps `loadstring` and `load` (over captured C upvalues) to return `nil, "binary chunks are not allowed"` on `\27`-prefixed strings or reader streams, and Python rejects `\x1b`-prefixed source before `run_chunk`, `run_chunk_value`, `check_syntax`, `SimulatedClient.load_addon` (`run_addon_chunk`), `luacheck._compile_and_dump` (which uses `sandbox=False`), `savedvars.parse_savedvars_lua`, and `wow_test`; (2) `luavm.new_runtime` passes an `attribute_filter` to `lua51.LuaRuntime` that raises `AttributeError` on every attribute get/set against Python objects; (3) `default_cache_dir`, `default_data_dir`, and `default_cursor_dir` delegate to `env.hermes_home_dir()`, which calls `hermes_constants.get_hermes_home()` dynamically inside Hermes and falls back to `$HERMES_HOME` → `~/.hermes` in standalone CLI and CI runs.

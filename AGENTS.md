@@ -1,6 +1,6 @@
 # AGENTS.md — hermes-wow-plugin agent operating manual
 
-> **Version 1.0 — last updated 2026-11-11.** This file is law for every agent
+> **Version 1.1 — last updated 2026-11-24.** This file is law for every agent
 > session in this repo. Re-stamp the date on any edit; bump the version when a rule
 > or gate changes (not for snapshot facts); log rule changes in goose-deuce.md.
 
@@ -34,8 +34,14 @@ green commit, record where the work lives on the task, and stop cleanly.
 - **Platforms that must work:** macOS on Apple Silicon (live WoW: Forever client, Hermes
   Desktop) and Linux (Python + headless-Lua suite in CI) — the only acceptable
   evidence for a platform is a real command run on it; anything claimed about the live game
-  client needs an in-game run recorded in `docs/INGAME-CHECKLIST.md`. Windows install
-  layouts are handled in code and unit-tested with hostile paths, but not claimed.
+  client needs an in-game run recorded in `docs/INGAME-CHECKLIST.md`. Windows 11 (x64):
+  the full gate and `hermes plugins validate .` pass, and `wow_env` detection was run
+  against a live Forever install at `C:\Program Files (x86)\World of Warcraft` (T-061,
+  2026-11-24); CI is configured to run the gate on `windows-latest` but has not run yet.
+  An in-game run on Windows and the Hermes Desktop pane on Windows are not yet claimed.
+  Platform-specific code must also pass `uv run mypy --platform linux src` and
+  `--platform darwin src` (and `win32`): mypy narrows on `sys.platform`, so a check
+  run on one OS cannot see another OS's unreachable-code errors.
   Never claim a platform works from a run on a different one.
 - **Layout:**
 

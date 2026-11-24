@@ -21,7 +21,7 @@ from typing import Any
 
 from wow_addon_forge import env, luacheck, luavm, tocfile
 from wow_addon_forge.apidocs import ApiIndex
-from wow_addon_forge.env import FileSystem, RealFileSystem
+from wow_addon_forge.env import FileSystem, RealFileSystem, path_is_under
 from wow_addon_forge.headless.runtime import HeadlessError, SimulatedClient, World
 from wow_addon_forge.headless.savedvars_io import SavedVariablesError
 from wow_addon_forge.luacheck import FORBIDDEN_LUA_GLOBALS, LUA_51_SAFE_GLOBALS, Proto
@@ -1192,8 +1192,12 @@ def run_addon_tests(
     else:
         entries = [tests] if isinstance(tests, str) else list(tests)
         for entry in entries:
+            # [2026-11-24 T-061] path_is_under ignores separator style, and letter case on
+            # Windows, so an absolute test path typed as c:\... still counts as inside.
             resolved = (
-                entry if entry.startswith(addon_path) else _join_rel(active_fs, addon_path, entry)
+                entry
+                if path_is_under(entry, addon_path)
+                else _join_rel(active_fs, addon_path, entry)
             )
             if active_fs.is_file(resolved):
                 if resolved.lower().endswith(".lua"):
@@ -1209,7 +1213,7 @@ def run_addon_tests(
         base = addon_path.replace("\\", "/").rstrip("/")
         rel_test = (
             normalised[len(base) :].lstrip("/")
-            if normalised.startswith(base)
+            if path_is_under(normalised, base)
             else normalised.rsplit("/", 1)[-1]
         )
         source = active_fs.read_text(test_path)
