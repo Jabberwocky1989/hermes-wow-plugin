@@ -3,6 +3,7 @@
      `<YYYY-MM-DD> — T-<###> — <what changed, user-visible effect>`
      Internal-only tasks get one line ending `(no user-visible change)`. -->
 
+2026-11-24 — T-067 — `wow_api status` and `sync` now include `resource_lists`, which names the global API, event, enum and other resource files, says they come from Ketho/BlizzardInterfaceResources, and says their build is unknown and may differ from the index's documentation build (on 2026-11-24: 70938 against 71091)
 2026-11-24 — T-066 — `wow_api sync` now loads documentation files that read `Enum.*Meta` tables (derived from the matching enum, as the live client provides them): on build 71091 the sync reports no warnings, and `LFGRoles` and `Constants.LFG_ROLEConstants` (`LFG_ROLE_ANY` = 3, `LFG_ROLE_NO_ROLE` = -1) are in the index
 2026-11-24 — T-065 — `wow_test` and headless scenarios now return secret values from `UnitName`, `UnitFullName`, `UnitGUID` and `UnitIsUnit` while a restriction is active, as the 1.60.1 index documents, so an addon's secret-name fallback is exercised headless (Guildhall's Board refuses a post with `no-self` during a restriction instead of posting); addon tests that relied on reading the player's name during a restriction now see a secret
 2026-11-24 — T-062 — `wow_install` no longer fails with "file already exists" after a link-mode install whose source folder was later moved or deleted: the broken link (symlink, or junction on Windows) is removed, the install goes ahead, and the result's note says a dangling link was replaced (there is nothing to back up)

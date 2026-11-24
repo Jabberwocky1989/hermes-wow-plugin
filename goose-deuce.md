@@ -123,6 +123,14 @@ tag, choose the owing one.
 <!-- Real entries accumulate below, NEWEST AT THE TOP. The top entries are
      session-start required reading (count: AGENTS.md → Session ritual). -->
 
+## 2026-11-24 — T-067 says the resource build is unknown instead of comparing it  [scope]
+- Task: T-067 / T-069
+- What: The Accept asked status and sync to name the resource lists' build and warn when it differs from the documentation build, with tests for equal, different and unknown. Ketho/BlizzardInterfaceResources publishes its build only in commit messages (`1.60.1 (70938)`), not in any fetched file, so the build is always unknown: the index and status carry `resource_lists`, one sentence naming the files and origin and saying their build is unknown and may differ. No comparison or difference warning was built, because neither case can occur.
+- Why: Reading commit messages needs `api.github.com`, which the fetcher refuses by design (only `raw.githubusercontent.com` passes; `UrlFetcher`, since T-005). Widening that allowlist is a security call for the owner, filed as T-069. A permanent "unknown" warning on every sync would bury real warnings, so it is a status field, not a warning.
+- Where: `src/wow_addon_forge/apidocs.py` (`describe_resource_lists`, `SourceBundle.resource_origin`, `ApiIndex.status`); `TASKS.md`.
+- Plan: T-067 Accept (name build, warn on difference) → names origin, says build unknown; the comparison waits on T-069. docs/PLAN.md not falsified.
+- Commit(s): this commit
+
 ## 2026-11-24 — T-066 Accept named LFG_ROLE_ANY as a lookup name  [approach]
 - Task: T-066
 - What: The Accept said `wow_api lookup LFG_ROLE_ANY` is found. `LFG_ROLE_ANY` is a value inside the documented table `Constants.LFG_ROLEConstants`, not an entry of its own, so the check is `wow_api lookup Constants.LFG_ROLEConstants` showing `LFG_ROLE_ANY: 3` and `LFG_ROLE_NO_ROLE: -1`. The Meta tables are derived from `Enum.X` (count, min, max of its numeric values) rather than hard-coded for LFGRole.

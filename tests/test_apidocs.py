@@ -908,3 +908,30 @@ def test_ze_enum_with_its_own_metatable_is_left_alone_and_warned() -> None:
         warning.startswith("apidocs-enum-meta.lua: Enum already has a metatable")
         for warning in data["warnings"]
     )
+
+
+def test_zf_status_says_where_resource_lists_came_from_and_build_is_unknown() -> None:
+    """ZF: a mirror index names the resource lists' origin and says their build is unknown."""
+    bundle = fetch_mirror_bundle(FakeFetcher(fixture_mirror_files()), "forever")
+    assert bundle.resource_origin == "Ketho/BlizzardInterfaceResources (forever branch)"
+    data = build_index(bundle, generated_at=GENERATED_AT)
+    status = ApiIndex(data).status(now=GENERATED_AT)
+    described = status["resource_lists"]
+    assert isinstance(described, str)
+    assert "GlobalAPI.lua" in described and "LuaEnum.lua" in described
+    assert "from Ketho/BlizzardInterfaceResources (forever branch)" in described
+    assert "publishes no build number" in described
+    assert "different build than 1.60.1.70888" in described
+    # A canned bundle with resources but no named origin still says the build is unknown.
+    assert "an unnamed source" in str(built_data()["resource_lists"])
+
+
+def test_zg_resource_lists_absent_for_an_export_and_an_older_index() -> None:
+    """ZG: an export has no resource lists; an index cached before T-067 reports None."""
+    bundle = load_export_bundle(FakeFileSystem(fixture_export_files()), None, "forever")
+    assert bundle is not None
+    data = build_index(bundle, generated_at=GENERATED_AT)
+    assert data["resource_lists"] is None
+    older = built_data()
+    del older["resource_lists"]
+    assert ApiIndex(older).status(now=GENERATED_AT)["resource_lists"] is None

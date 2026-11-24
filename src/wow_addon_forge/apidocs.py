@@ -256,6 +256,8 @@ class SourceBundle:
             are added to these by ``build_index``.
         origin: The local export folder the texts were read from; ``""`` for a mirror
             bundle. Sync results quote it so the user sees which export was indexed.
+        resource_origin: [2026-11-24 T-067] Where ``resources`` came from, e.g.
+            ``"Ketho/BlizzardInterfaceResources (forever branch)"``; ``""`` when unnamed.
 
     Returns:
         Nothing; this is a data holder.
@@ -271,6 +273,7 @@ class SourceBundle:
     resources: dict[str, str]
     warnings: list[str] = field(default_factory=list)
     origin: str = ""
+    resource_origin: str = ""
 
 
 def normalise_flavor(flavor: object) -> str:
@@ -400,6 +403,7 @@ def fetch_mirror_bundle(fetcher: Fetcher, flavor: str, *, max_workers: int = 16)
         documentation=documentation,
         resources=resources,
         warnings=warnings,
+        resource_origin=f"Ketho/BlizzardInterfaceResources ({branch} branch)",
     )
 
 
@@ -1072,6 +1076,37 @@ def _run_lua_enum(runtime: Any, bundle: SourceBundle, warnings: list[str]) -> tu
     return enum_global, constants_global
 
 
+def describe_resource_lists(bundle: SourceBundle) -> str | None:
+    """Say where an index's resource lists came from and that their build is unknown.
+
+    Why this exists:
+        [2026-11-24 T-067] An index is labelled with the documentation build
+        (``version.txt`` on the Gethe mirror), but its global API, event, enum, FrameXML,
+        widget, template and mixin lists come from Ketho/BlizzardInterfaceResources, which
+        publishes its build only in commit messages. Those are on ``api.github.com``, a
+        host the fetcher refuses (only ``raw.githubusercontent.com`` passes), so the lists'
+        build cannot be read. On 2026-11-24 the two mirrors stood at 71091 and 70938.
+        Saying so beats a single build label that silently covers both.
+
+    Args:
+        bundle: The bundle the index is built from.
+
+    Returns:
+        One sentence naming the resource files and their origin and saying their build is
+        unknown, or None when the bundle has no resource lists (a client export).
+
+    Failure modes:
+        None.
+    """
+    if not bundle.resources:
+        return None
+    origin = bundle.resource_origin or "an unnamed source"
+    return (
+        f"{', '.join(sorted(bundle.resources))} came from {origin}, which publishes no "
+        f"build number in its files; they may be from a different build than {bundle.build}."
+    )
+
+
 def build_index(bundle: SourceBundle, *, generated_at: float) -> dict[str, Any]:
     """Build the plain-data API index from one fetched bundle.
 
@@ -1144,6 +1179,7 @@ def build_index(bundle: SourceBundle, *, generated_at: float) -> dict[str, Any]:
         "source": bundle.source,
         "generated_at": float(generated_at),
         "documentation_files": len(bundle.documentation),
+        "resource_lists": describe_resource_lists(bundle),
         "counts": {kind: len(entries[kind]) for kind in KINDS},
         "warnings": warnings,
         "widgets": widgets,
@@ -1229,7 +1265,9 @@ class ApiIndex:
         Returns:
             A dict with ``flavor``, ``build``, ``source``, ``schema``, ``generated_at``,
             ``generated_at_utc`` (ISO 8601 UTC, seconds, ending ``"Z"``), ``age_seconds``
-            (never negative), ``documentation_files``, ``counts``, ``warning_count``,
+            (never negative), ``documentation_files``, ``resource_lists`` (see
+            ``describe_resource_lists``; None for an export or an index built before
+            T-067), ``counts``, ``warning_count``,
             ``warnings`` (first 20) and ``warnings_truncated``.
 
         Failure modes:
@@ -1263,6 +1301,7 @@ class ApiIndex:
             .replace("+00:00", "Z"),
             "age_seconds": max(0, int(now - generated)),
             "documentation_files": self._data.get("documentation_files"),
+            "resource_lists": self._data.get("resource_lists"),
             "counts": counts,
             "warning_count": len(all_warnings),
             "warnings": all_warnings[:20],

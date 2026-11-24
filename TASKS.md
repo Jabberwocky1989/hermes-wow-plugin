@@ -12,16 +12,17 @@
       Accept: `scripts/discord_bridge.py poll|once` POSTs each new outbox record to a Discord incoming webhook, and `send` pushes a Discord-sourced post into `Inbox.lua` for the addon to apply on `/reload`; the webhook URL is read from `$GUILDHALL_DISCORD_WEBHOOK` (or `--webhook`) and is never committed. Live: a board post appears in the channel, and a `send` appears on the board after `/reload`. A unit test covers the webhook POST and the record shape against a mocked HTTP layer. Full gate green.
       Touches: `scripts/discord_bridge.py`, `tests/`, `TASKS.md`, `CHANGELOG.md`   Depends: T-023   Gated: none
 
-- [ ] T-067 — API index: record the resource lists' own build
-      Why: The index is labelled with the Gethe build (71091 on 2026-11-24) while its global API, event, enum and FrameXML lists come from Ketho/BlizzardInterfaceResources at an older build (70938), and nothing says so.
-      Accept: `wow_api status` and `sync` name the resource lists' build (or say it is unknown) and add a warning when it differs from the documentation build; hermetic tests cover the equal, different and unknown cases; full gate green.
-      Touches: `src/wow_addon_forge/apidocs.py`, `tests/test_apidocs.py`, `CHANGELOG.md`, `TASKS.md`   Depends: none   Gated: none
 - [ ] T-068 — Skill: correct the "old globals are gone" line
       Why: `SKILL.md` lists `C_UI.Reload` under "Old globals are gone", but `ReloadUI` is still in the 1.60.1.71091 index.
       Accept: The line names only replacements whose old global is absent from the current index, or says `ReloadUI` still exists; `wow_api lookup` run for each named old global confirms it; `tests/test_cli_and_skill.py` passes; full gate green.
       Touches: `skills/wow-addon-builder/SKILL.md`, `CHANGELOG.md`, `TASKS.md`   Depends: none   Gated: none
 
 ## Later
+- [ ] T-069 — API index: read the Ketho resources' build from the commit message
+      Why: Ketho/BlizzardInterfaceResources states its build only in commit messages (`1.60.1 (70938)` on 2026-11-24, while the Gethe docs were at 71091); T-067 can only say the build is unknown.
+      Accept: `wow_api sync` records the resource lists' build when it can be read and warns when it differs from the documentation build; a failed or refused read says unknown, as now; hermetic tests cover equal, different and unreadable; full gate green.
+      Touches: `src/wow_addon_forge/apidocs.py`, `tests/test_apidocs.py`, `CHANGELOG.md`, `TASKS.md`   Depends: T-067   Gated: owner
+      Decision needed: the read needs `api.github.com` (`GET /repos/Ketho/BlizzardInterfaceResources/commits/forever`, unauthenticated limit 60 requests an hour), a second host past the fetcher's single-host allowlist. Options: (a) allow that one exact URL; (b) leave the build unknown. Recommendation: (a), exact-URL only, failures degrade to unknown. Hard to reverse: nothing; it is one refusal rule.
 - [ ] T-063 — In-game acceptance on Windows
       Why: T-061 proved the plugin on Windows headlessly and against the install folder only; nothing has loaded in the Windows game client (AGENTS.md: live-client claims need an in-game run).
       Accept: On Windows, `wow_install` (copy mode, then link mode via a junction) installs ForgeProbe; the client lists and loads it; `wow_errors` reads its ring back; results recorded in `docs/INGAME-CHECKLIST.md` with platform named.
@@ -88,6 +89,10 @@
 ## Dropped
 
 ## Done
+- [x] T-067 — API index: record the resource lists' own build (2026-11-24, this commit)
+      Why: The index is labelled with the Gethe build (71091 on 2026-11-24) while its global API, event, enum and FrameXML lists come from Ketho/BlizzardInterfaceResources at an older build (70938), and nothing says so.
+      Accept: `wow_api status` and `sync` carry `resource_lists`, naming the resource files and their origin and saying their build is unknown and may differ from the documentation build; None for a client export and for an index cached before T-067; hermetic tests cover the mirror, export and older-index cases and fail against the pre-change code; full gate green. (Narrowed 2026-11-24: the mirror publishes no build in its files, so there is nothing to compare; goose-deuce.md 2026-11-24 "T-067 says the resource build is unknown instead of comparing it". Reading the real build is T-069.)
+      Touches: `src/wow_addon_forge/apidocs.py`, `tests/test_apidocs.py`, `CHANGELOG.md`, `TASKS.md`   Depends: none   Gated: none
 - [x] T-066 — API index: load documentation files that use `Enum.*Meta` (2026-11-24, this commit)
       Why: `LFGConstantsDocumentation.lua` reads `Enum.LFGRoleMeta.NumValues`; the Ketho `LuaEnum.lua` carries no `…Meta` tables, so the file fails on every sync and the index loses `LFGRoles`, `LFG_ROLE_NO_ROLE` and `LFG_ROLE_ANY` (warning present since at least build 70888, `docs/gate/` transcripts).
       Accept: `wow_api sync` against build 71091 reports zero documentation warnings; `wow_api lookup LFGRoles` is found and `wow_api lookup Constants.LFG_ROLEConstants` shows `LFG_ROLE_ANY` and `LFG_ROLE_NO_ROLE` (corrected 2026-11-24: they are values of that table, goose-deuce.md 2026-11-24 "T-066 Accept named LFG_ROLE_ANY as a lookup name"); a hermetic test feeds a documentation file reading `Enum.XMeta.NumValues` and fails against the pre-change code; full gate green.
