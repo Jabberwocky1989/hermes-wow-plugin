@@ -37,7 +37,8 @@ green commit, record where the work lives on the task, and stop cleanly.
   client needs an in-game run recorded in `docs/INGAME-CHECKLIST.md`. Windows 11 (x64):
   the full gate and `hermes plugins validate .` pass, and `wow_env` detection was run
   against a live Forever install at `C:\Program Files (x86)\World of Warcraft` (T-061,
-  2026-11-24); CI is configured to run the gate on `windows-latest` but has not run yet.
+  2026-11-24); the CI gate passed on `windows-latest`, `ubuntu-latest` and `macos-latest`
+  in a fork's CI run (Jabberwocky1989/hermes-wow-plugin run 45434501131, 2026-11-24).
   An in-game run on Windows and the Hermes Desktop pane on Windows are not yet claimed.
   Platform-specific code must also pass `uv run mypy --platform linux src` and
   `--platform darwin src` (and `win32`): mypy narrows on `sys.platform`, so a check
