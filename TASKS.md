@@ -12,6 +12,19 @@
       Accept: `scripts/discord_bridge.py poll|once` POSTs each new outbox record to a Discord incoming webhook, and `send` pushes a Discord-sourced post into `Inbox.lua` for the addon to apply on `/reload`; the webhook URL is read from `$GUILDHALL_DISCORD_WEBHOOK` (or `--webhook`) and is never committed. Live: a board post appears in the channel, and a `send` appears on the board after `/reload`. A unit test covers the webhook POST and the record shape against a mocked HTTP layer. Full gate green.
       Touches: `scripts/discord_bridge.py`, `tests/`, `TASKS.md`, `CHANGELOG.md`   Depends: T-023   Gated: none
 
+- [ ] T-066 — API index: load documentation files that use `Enum.*Meta`
+      Why: `LFGConstantsDocumentation.lua` reads `Enum.LFGRoleMeta.NumValues`; the Ketho `LuaEnum.lua` carries no `…Meta` tables, so the file fails on every sync and the index loses `LFGRoles`, `LFG_ROLE_NO_ROLE` and `LFG_ROLE_ANY` (warning present since at least build 70888, `docs/gate/` transcripts).
+      Accept: `wow_api sync` against build 71091 reports zero documentation warnings; `wow_api lookup LFGRoles` and `LFG_ROLE_ANY` are found; a hermetic test feeds a documentation file reading `Enum.XMeta.NumValues` and fails against the pre-change code; full gate green.
+      Touches: `src/wow_addon_forge/apidocs.py`, `tests/test_apidocs.py`, `CHANGELOG.md`, `TASKS.md`   Depends: none   Gated: none
+- [ ] T-067 — API index: record the resource lists' own build
+      Why: The index is labelled with the Gethe build (71091 on 2026-11-24) while its global API, event, enum and FrameXML lists come from Ketho/BlizzardInterfaceResources at an older build (70938), and nothing says so.
+      Accept: `wow_api status` and `sync` name the resource lists' build (or say it is unknown) and add a warning when it differs from the documentation build; hermetic tests cover the equal, different and unknown cases; full gate green.
+      Touches: `src/wow_addon_forge/apidocs.py`, `tests/test_apidocs.py`, `CHANGELOG.md`, `TASKS.md`   Depends: none   Gated: none
+- [ ] T-068 — Skill: correct the "old globals are gone" line
+      Why: `SKILL.md` lists `C_UI.Reload` under "Old globals are gone", but `ReloadUI` is still in the 1.60.1.71091 index.
+      Accept: The line names only replacements whose old global is absent from the current index, or says `ReloadUI` still exists; `wow_api lookup` run for each named old global confirms it; `tests/test_cli_and_skill.py` passes; full gate green.
+      Touches: `skills/wow-addon-builder/SKILL.md`, `CHANGELOG.md`, `TASKS.md`   Depends: none   Gated: none
+
 ## Later
 - [ ] T-063 — In-game acceptance on Windows
       Why: T-061 proved the plugin on Windows headlessly and against the install folder only; nothing has loaded in the Windows game client (AGENTS.md: live-client claims need an in-game run).
@@ -79,6 +92,10 @@
 ## Dropped
 
 ## Done
+- [x] T-065 — Headless: hand-written unit calls honour the index's secret returns (2026-11-24, this commit)
+      Why: The 1.60.1.71091 index marks `UnitName`, `UnitFullName`, `UnitGUID` and `UnitIsUnit` as secret-returning, but the simulator's hand-written versions ignore that, so `issecretvalue(UnitName("player"))` is false under every restriction and no test reaches the addons' secret-name fallback (found in the 2026-11-24 content review).
+      Accept: Under an active restriction, a default `World` client returns secret values from those four calls and plain values once the restriction lifts; the rule is the same one the generated stubs use (an index entry with secret returns, any active restriction), so an index entry without secret returns keeps a hand-written call plain; `minimal_api_index` carries the four entries' secret metadata from build 71091; the new tests fail against the pre-change code; Guildhall and the blocks still pass `wow_check` and their Lua tests; full gate green, mypy clean for win32, linux and darwin.
+      Touches: `src/wow_addon_forge/headless/runtime.py`, `tests/test_secret_values.py`, `CHANGELOG.md`, `TASKS.md`   Depends: none   Gated: none
 - [x] T-061 — Windows support: test, fix and gate the plugin on Windows (2026-11-24, this commit)
       Why: The plugin claimed only macOS and Linux; Windows layouts were handled in code but never run on Windows.
       Accept: On Windows 11 the full gate passes (pytest with coverage ≥ 85%, ruff check, ruff format --check, mypy) and `hermes plugins validate .` passes; `uv run mypy --platform linux src` and `--platform darwin src` pass; `python -m wow_addon_forge env` finds a live Forever install at the default root; link-mode install works without symlink privilege (junction fallback) and replacing a junction never deletes its source; replacing an addon holding read-only files succeeds on Windows; the CI gate goes green on `windows-latest`, `ubuntu-latest` and `macos-latest` (green in the fork's CI: Jabberwocky1989/hermes-wow-plugin run 45434501131 on `ef81516`, 2026-11-24; macOS needed a second attempt because the first got no runner and ran no steps).

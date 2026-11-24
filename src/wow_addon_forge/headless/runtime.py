@@ -138,6 +138,31 @@ _CORE_FUNCTIONS: tuple[str, ...] = (
     "GetBuildInfo",
 )
 
+# [2026-11-24 T-065] The secret metadata of the core functions whose returns the
+# synced 1.60.1.71091 index marks secret (copied from that index's entries; every
+# other core function there has `returns: false`). The minimal index carries it so a
+# default World makes these calls secret under a restriction, exactly as a World
+# built on the synced index does; with plain entries the addons' secret-name
+# fallbacks were never reached by any test.
+_CORE_SECRET_RETURNS: dict[str, dict[str, Any]] = {
+    "UnitName": {
+        "args": "AllowedWhenTainted",
+        "conditions": ("SecretWhenUnitNameIdentityRestricted",),
+    },
+    "UnitFullName": {
+        "args": "AllowedWhenUntainted",
+        "conditions": ("SecretWhenUnitIdentityRestricted",),
+    },
+    "UnitGUID": {
+        "args": "AllowedWhenUntainted",
+        "conditions": ("SecretWhenUnitIdentityRestricted",),
+    },
+    "UnitIsUnit": {
+        "args": "AllowedWhenUntainted",
+        "conditions": ("SecretWhenUnitComparisonRestricted",),
+    },
+}
+
 _CORE_EVENTS: tuple[str, ...] = (
     "ADDON_LOADED",
     "PLAYER_LOGIN",
@@ -345,6 +370,13 @@ def minimal_api_index(
         entry["returns"] = []
         entry["flags"] = {}
         entry["c_api"] = True
+        secret = _CORE_SECRET_RETURNS.get(name)
+        if secret is not None:
+            entry["secret"] = {
+                "args": secret["args"],
+                "returns": True,
+                "conditions": list(secret["conditions"]),
+            }
         entries["function"][name] = entry
     for event_name in dict.fromkeys((*_CORE_EVENTS, *extra_events)):
         name = str(event_name)
@@ -1292,6 +1324,78 @@ class SimulatedClient:
             return 0
         return None
 
+    @staticmethod
+    def _has_secret_returns(entry: Mapping[str, Any] | None) -> bool:
+        secret = entry.get("secret") if entry is not None else None
+        return isinstance(secret, Mapping) and secret.get("returns") is True
+
+    def _secret_returns_active(self, entry: Mapping[str, Any] | None) -> bool:
+        """Say whether a call to ``entry``'s function returns secret values right now.
+
+        Why this exists:
+            [2026-11-24 T-065] One rule for every simulated function, generated stub or
+            hand-written: an index entry whose ``secret.returns`` is true returns secret
+            values while any restriction regime is active. The entry's ``conditions``
+            (for example ``SecretWhenUnitNameIdentityRestricted``) are not matched to a
+            regime, because nothing in the index says which regime sets which condition;
+            treating every regime as setting them is the T-034 simplification, kept.
+
+        Args:
+            entry: The function's index entry, or None for a function the index lacks.
+
+        Returns:
+            True when the entry has secret returns and a restriction is active.
+
+        Failure modes:
+            None.
+        """
+        return self._has_secret_returns(entry) and bool(self._active_restrictions)
+
+    def _secret_or_nil(self, value: Any) -> Any:
+        # [2026-11-24 T-065] nil stays nil: a missing return has no value to hide.
+        # Whether the live client makes a nil return secret is unobserved.
+        if value is None or self._controller is None:
+            return value
+        return self._controller.make_secret()
+
+    def _honour_secret_returns(
+        self, full_name: str, function: Callable[..., Any]
+    ) -> Callable[..., Any]:
+        """Wrap a hand-written function so it follows its index entry's secret returns.
+
+        Why this exists:
+            [2026-11-24 T-065] Generated stubs read the index's secret metadata, but the
+            hand-written ``UnitName``, ``UnitFullName``, ``UnitGUID`` and ``UnitIsUnit``
+            returned plain values under every restriction, so no test reached the
+            addons' secret-name fallbacks. Wrapping at install time keeps each
+            hand-written body about game state and puts the secrecy rule in one place.
+
+        Args:
+            full_name: The function's index name (``"UnitName"``, ``"C_Timer.After"``).
+            function: The hand-written Python implementation.
+
+        Returns:
+            ``function`` itself when the World's index gives it no secret returns;
+            otherwise a wrapper that, while ``_secret_returns_active``, replaces every
+            non-nil return value with a fresh secret and keeps the number of returns.
+
+        Failure modes:
+            None of its own; errors from ``function`` propagate unchanged.
+        """
+        entry = self._world.functions_by_name.get(full_name)
+        if not self._has_secret_returns(entry):
+            return function
+
+        def wrapped(*args: Any) -> Any:
+            result = function(*args)
+            if not self._secret_returns_active(entry):
+                return result
+            if isinstance(result, tuple):
+                return tuple(self._secret_or_nil(value) for value in result)
+            return self._secret_or_nil(result)
+
+        return wrapped
+
     def _make_stub(self, full_name: str, entry: Mapping[str, Any]) -> Callable[..., Any]:
         cached = self._stub_cache.get(full_name)
         if cached is not None:
@@ -1306,13 +1410,9 @@ class SimulatedClient:
         def stub(*_args: Any) -> Any:
             # [2026-11-11 T-034] A documented secret return is opaque only while
             # a restriction regime is active. Unrestricted calls keep the typed default.
-            secret = entry.get("secret")
-            if (
-                isinstance(secret, Mapping)
-                and secret.get("returns") is True
-                and self._active_restrictions
-                and self._controller is not None
-            ):
+            # [2026-11-24 T-065] The rule now lives in _secret_returns_active, shared
+            # with the hand-written functions, so the two paths cannot disagree.
+            if self._secret_returns_active(entry) and self._controller is not None:
                 return self._controller.make_secret()
             # [2026-11-11 T-007] Defaults are built per call, not once, so a
             # table default is a fresh Lua table each time; addon code that
@@ -1420,7 +1520,9 @@ class SimulatedClient:
             "GetBuildInfo": self._global_get_build_info,
         }
         for global_name, function in globals_to_install.items():
-            controller.set_global_function(global_name, function)
+            controller.set_global_function(
+                global_name, self._honour_secret_returns(global_name, function)
+            )
 
     def _install_namespaces(self, controller: Any, runtime: Any) -> None:
         # [2026-11-11 T-007] Namespace functions are dot functions in WoW, so
@@ -1455,7 +1557,9 @@ class SimulatedClient:
         for namespace in sorted(self._world.c_namespaces):
             methods_table = runtime.table()
             for method_name, function in real_methods.get(namespace, {}).items():
-                methods_table[method_name] = function
+                methods_table[method_name] = self._honour_secret_returns(
+                    f"{namespace}.{method_name}", function
+                )
             controller.install_namespace(namespace, methods_table)
 
     def _resolve_unit(self, unit: Any) -> SimulatedClient | None:

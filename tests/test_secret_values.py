@@ -90,3 +90,63 @@ def test_guildhall_and_forgeprobe_still_pass() -> None:
     for name in ("Guildhall", "ForgeProbe"):
         report = check_addon(REPO / "addons" / name, index=index)
         assert report["verdict"] == "pass", (name, report["findings"])
+
+
+# [2026-11-24 T-065] The four unit calls the synced 1.60.1.71091 index marks
+# secret-returning. Before T-065 their hand-written simulations returned plain values
+# under every restriction, so no test reached the addons' secret-name fallbacks.
+_SECRET_UNIT_CALLS = {
+    "UnitName": 'UnitName("player")',
+    "UnitFullName": 'UnitFullName("player")',
+    "UnitGUID": 'UnitGUID("player")',
+    "UnitIsUnit": 'UnitIsUnit("player", "player")',
+}
+
+
+def test_hand_written_unit_calls_return_secrets_under_a_restriction() -> None:
+    world = World(index=minimal_api_index())
+    ann = world.client("Ann", rank=1)
+    for name, call in _SECRET_UNIT_CALLS.items():
+        assert ann.run_lua(f"return issecretvalue(({call}))") is False, name
+    returns_plain = ann.run_lua('return select("#", UnitName("player"))')
+    ann.set_restriction("Combat")
+    for name, call in _SECRET_UNIT_CALLS.items():
+        assert ann.run_lua(f"return issecretvalue(({call}))") is True, name
+    # The wrapper hides values; it never changes how many values come back.
+    assert ann.run_lua('return select("#", UnitName("player"))') == returns_plain
+    ann.set_restriction("Combat", active=False)
+    assert ann.run_lua('return (UnitName("player"))') == "Ann"
+    assert ann.errors == []
+
+
+def test_hand_written_secrecy_follows_the_index_entry() -> None:
+    # An index whose UnitName entry has no secret returns keeps UnitName plain under
+    # a restriction, while UnitGUID (still secret-returning) turns secret: the rule
+    # reads the index, not a fixed list of names in the simulator.
+    data = copy.deepcopy(minimal_api_index().data)
+    data["entries"]["function"]["UnitName"]["secret"] = {
+        "args": None,
+        "returns": False,
+        "conditions": [],
+    }
+    world = World(index=ApiIndex(data))
+    ann = world.client("Ann", rank=1)
+    ann.set_restriction("Combat")
+    assert ann.run_lua('return issecretvalue((UnitName("player")))') is False
+    assert ann.run_lua('return issecretvalue((UnitGUID("player")))') is True
+    assert ann.errors == []
+
+
+def test_guildhall_board_refuses_a_post_while_its_own_name_is_secret() -> None:
+    # Guildhall's self_name falls back to "" for a secret name; Board.post then
+    # refuses with "no-self" instead of authoring a record with an empty author.
+    world = World(index=minimal_api_index(), rng_seed=65065)
+    ann = world.client("Ann", rank=1)
+    ann.load_addon(REPO / "addons" / "Guildhall")
+    ann.set_restriction("Combat")
+    assert ann.run_lua('return select(2, Guildhall.Board.post("Raid Friday"))') == "no-self"
+    assert ann.run_lua("return #Guildhall.Board.rows()") == 0
+    ann.set_restriction("Combat", active=False)
+    assert isinstance(ann.run_lua('return Guildhall.Board.post("Raid Friday")'), str)
+    assert ann.run_lua("return #Guildhall.Board.rows()") == 1
+    assert ann.errors == []
