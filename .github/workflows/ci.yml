@@ -1,5 +1,8 @@
 # [2026-11-11 T-014] Full gate on macOS and Linux, including Hermes catalog validation.
 # [2026-11-11 T-051] The secrets job mirrors the Eldr repo's hardened gitleaks gate.
+# [2026-11-24 T-061] Windows joins the gate. Steps run in bash on every OS (Git Bash on
+# Windows) so a multi-line step stops at its first failing command, as it does elsewhere;
+# the Windows default shell (pwsh) only checks the last native command's exit code.
 name: CI
 
 on:
@@ -18,7 +21,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

@@ -169,3 +169,18 @@ def test_wow_new_is_registered() -> None:
     registered = register_tools(ctx)
     assert registered == list(PROVIDES_TOOLS)
     assert "wow_new" in registered
+
+
+def test_windows_reserved_names_are_refused_on_every_os(tmp_path: Path) -> None:
+    # [2026-11-24 T-064] On Windows 11 build 26300 `NUL` could not be created at all and
+    # `CON` could; both are refused everywhere so an addon made on macOS installs on Windows.
+    tools = _tools(tmp_path)
+    for name in ("CON", "Nul", "aux", "COM1", "LPT9"):
+        dest = tmp_path / f"Dest{name}"
+        refused = json.loads(
+            tools.handle_new({"name": name, "title": name, "modules": ["core"], "dest": str(dest)})
+        )
+        assert refused["ok"] is False, (name, refused)
+        assert refused["error"]["code"] == "bad-name", (name, refused)
+        assert "Windows reserves" in refused["error"]["message"]
+        assert not dest.exists(), name

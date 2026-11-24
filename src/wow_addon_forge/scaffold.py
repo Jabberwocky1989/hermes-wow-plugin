@@ -3,7 +3,8 @@
 Invariants owned by this file:
 - A scaffold writes only inside ``dest``. A dest that already has entries is refused
   before any write.
-- The addon name becomes a Lua global, so it must be a Lua identifier. The token
+- The addon name becomes a Lua global, so it must be a Lua identifier, and a folder,
+  so it must not be a Windows device name ([2026-11-24 T-064]). The token
   ``@@ADDON@@`` in every copied file is replaced with that name, and ``@@SLASH@@``
   with the resolved slash command ([2026-11-11 T-046]; default ``/`` + lowercased
   name, or the caller's validated ``slash``).
@@ -16,6 +17,8 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+
+from wow_addon_forge.tocfile import is_windows_reserved_name
 
 TOKEN = "@@ADDON@@"
 SLASH_TOKEN = "@@SLASH@@"
@@ -154,6 +157,15 @@ def scaffold_addon(
             "bad-name",
             f"Addon name {name!r} is not a Lua identifier.",
             "Use a name of letters, digits and underscores, starting with a letter.",
+        )
+    # [2026-11-24 T-064] Refused on every OS, not only Windows: the name becomes the addon
+    # folder and TOC that guild mates install, Microsoft's naming rules reserve these
+    # names, and on Windows 11 build 26300 a `NUL` folder could not be created at all.
+    if is_windows_reserved_name(name):
+        raise ScaffoldError(
+            "bad-name",
+            f"Addon name {name!r} is a device name Windows reserves.",
+            "Choose a name other than CON, PRN, AUX, NUL, COM0-9 or LPT0-9.",
         )
     if slash is None:
         resolved_slash = "/" + name.lower()

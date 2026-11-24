@@ -21,8 +21,14 @@ from typing import Any
 
 from wow_addon_forge import env, luacheck, luavm, tocfile
 from wow_addon_forge.apidocs import ApiIndex
-from wow_addon_forge.env import FileSystem, RealFileSystem
-from wow_addon_forge.headless.runtime import HeadlessError, SimulatedClient, World
+from wow_addon_forge.env import FileSystem, RealFileSystem, path_is_under
+from wow_addon_forge.headless.runtime import (
+    HEADLESS_CLIENT_INTERFACE,
+    HEADLESS_LOCALE,
+    HeadlessError,
+    SimulatedClient,
+    World,
+)
 from wow_addon_forge.headless.savedvars_io import SavedVariablesError
 from wow_addon_forge.luacheck import FORBIDDEN_LUA_GLOBALS, LUA_51_SAFE_GLOBALS, Proto
 from wow_addon_forge.tocfile import Finding
@@ -339,6 +345,14 @@ def _accesses_name(handler: Proto, wanted: str) -> bool:
     )
 
 
+def _skipped_dicts(skipped: Sequence[tuple[str, str]]) -> list[dict[str, str]]:
+    # [2026-11-24 T-072] One wire shape for wow_check and wow_test: a listed file the TOC's
+    # inline conditions exclude, and why. A field rather than a finding, because
+    # docs/SPEC-PLUGIN.md §4 fixes finding severity to error or warning and an excluded
+    # file is neither; it is reported so it is never silent.
+    return [{"file": path, "reason": reason} for path, reason in skipped]
+
+
 def check_addon(
     addon_dir: str | os.PathLike[str],
     *,
@@ -364,7 +378,9 @@ def check_addon(
     Returns:
         A dict with ``addon``, ``path``, ``flavor``, ``build``, ``verdict`` (``"pass"``
         when no error-severity finding exists, else ``"fail"``), ``error_count``,
-        ``warning_count``, and ``findings`` as ``Finding.to_dict()`` items in stage order.
+        ``warning_count``, ``findings`` as ``Finding.to_dict()`` items in stage order, and
+        ``skipped_files`` ([2026-11-24 T-072] ``{file, reason}`` per listed file the TOC's
+        inline conditions exclude for Forever, any locale; empty without a TOC).
 
     Failure modes:
         Raises ``ValueError`` when ``addon_dir`` is not an existing directory (the tool
@@ -400,6 +416,7 @@ def check_addon(
             "error_count": 1,
             "warning_count": 0,
             "findings": [missing.to_dict()],
+            "skipped_files": [],
         }
     toc_name, toc = chosen
     findings.extend(
@@ -417,7 +434,20 @@ def check_addon(
     # runtime; successfully compiled Protos are kept so stages 3, 4, and 6 never recompile.
     compile_rt = luavm.new_runtime(sandbox=False)
     compiled_files: list[tuple[str, Proto]] = []
-    for rel_file in toc.files:
+    # [2026-11-24 T-064] Only files the Forever client loads are compiled and analysed: a
+    # `[AllowLoadGameType vanilla]` file holds Classic-only calls that would read as false
+    # API findings here. Locale is not filtered (None): a static check covers every locale.
+    # [2026-11-24 T-072] The excluded half is reported as `skipped_files`, never dropped.
+    forever_files, skipped = toc.files_loaded(locale=None)
+    # [2026-11-24 T-073] A `[TextLocale]` line names one file per locale; each one present
+    # is compiled and analysed, since some player loads it. Absent variants are not errors
+    # here: lint_toc already reports a line none of whose variants exists.
+    variant_files = list(
+        dict.fromkeys(
+            variant for listed in forever_files for variant in tocfile.toc_path_variants(listed)
+        )
+    )
+    for rel_file in variant_files:
         if not rel_file.lower().endswith(".lua") or not _is_safe_rel(rel_file):
             continue
         file_path = _join_rel(active_fs, addon_path, rel_file)
@@ -746,6 +776,7 @@ def check_addon(
         "error_count": error_count,
         "warning_count": warning_count,
         "findings": [finding.to_dict() for finding in findings],
+        "skipped_files": _skipped_dicts(skipped),
     }
 
 
@@ -1165,8 +1196,11 @@ def run_addon_tests(
 
     Returns:
         A dict with ``addon``, ``path``, ``verdict``, ``total``, ``passed``,
-        ``failed``, and ``results``; each result has ``name``, ``file``, and
-        ``status``, plus ``message``/``stack`` on failure. A file that fails during
+        ``failed``, ``results`` and ``skipped_files``; each result has ``name``, ``file``,
+        and ``status``, plus ``message``/``stack`` on failure. ``skipped_files``
+        ([2026-11-24 T-072]) lists ``{file, reason}`` for each listed file the TOC's inline
+        conditions keep the headless client (Forever, ``HEADLESS_LOCALE``) from loading;
+        empty when there is no TOC or nothing is excluded. A file that fails during
         discovery contributes one failed ``"<load>"`` result.
 
     Failure modes:
@@ -1192,8 +1226,12 @@ def run_addon_tests(
     else:
         entries = [tests] if isinstance(tests, str) else list(tests)
         for entry in entries:
+            # [2026-11-24 T-061] path_is_under ignores separator style, and letter case on
+            # Windows, so an absolute test path typed as c:\... still counts as inside.
             resolved = (
-                entry if entry.startswith(addon_path) else _join_rel(active_fs, addon_path, entry)
+                entry
+                if path_is_under(entry, addon_path)
+                else _join_rel(active_fs, addon_path, entry)
             )
             if active_fs.is_file(resolved):
                 if resolved.lower().endswith(".lua"):
@@ -1209,7 +1247,7 @@ def run_addon_tests(
         base = addon_path.replace("\\", "/").rstrip("/")
         rel_test = (
             normalised[len(base) :].lstrip("/")
-            if normalised.startswith(base)
+            if path_is_under(normalised, base)
             else normalised.rsplit("/", 1)[-1]
         )
         source = active_fs.read_text(test_path)
@@ -1255,6 +1293,11 @@ def run_addon_tests(
                 )
     passed = sum(1 for result in results if result["status"] == "pass")
     failed = len(results) - passed
+    # [2026-11-24 T-072] The same TOC choice and conditions the headless loader applies
+    # (HEADLESS_CLIENT_INTERFACE, HEADLESS_LOCALE), so the report names exactly the files
+    # every test case ran without.
+    chosen = _choose_toc(active_fs, addon_path, folder_name, HEADLESS_CLIENT_INTERFACE)
+    skipped = chosen[1].files_loaded(locale=HEADLESS_LOCALE)[1] if chosen is not None else []
     return {
         "addon": folder_name,
         "path": addon_path,
@@ -1263,4 +1306,5 @@ def run_addon_tests(
         "passed": passed,
         "failed": failed,
         "results": results,
+        "skipped_files": _skipped_dicts(skipped),
     }

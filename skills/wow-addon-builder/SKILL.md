@@ -16,7 +16,8 @@ In order: `wow_env` → `wow_api` status (sync if the index is stale) → `wow_n
 ## Forever rules
 
 - Client 1.60.1, `## Interface: 16001`, Lua 5.1, retail Midnight API, not Classic.
-- Old globals are gone: use `C_Item.GetItemInfo`, `C_ChatInfo.SendChatMessage`, and `C_UI.Reload`.
+- Old globals are gone: use `C_Item.GetItemInfo` and `C_ChatInfo.SendChatMessage`.
+- Reload with `C_UI.Reload`, the documented call. `ReloadUI` still exists as a FrameXML helper.
 - Addons have no network and no file I/O. Game to outside is SavedVariables. Outside to game is a TOC-listed `.lua` file.
 - The combat log is closed. Do not read combat data.
 

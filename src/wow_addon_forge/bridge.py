@@ -22,7 +22,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from wow_addon_forge.env import FileSystem, hermes_home_dir
+from wow_addon_forge.env import FileSystem, hermes_home_dir, replace_file
 from wow_addon_forge.headless.savedvars_io import format_saved_variables_lua
 from wow_addon_forge.install import InstallError, addon_name, flavor_folder, locate_addons_dir
 from wow_addon_forge.luavm import check_syntax, new_runtime
@@ -232,7 +232,7 @@ def write_cursor(cursor_dir: str | os.PathLike[str], addon: str, cursor: int) ->
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps({"cursor": cursor}) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
+    replace_file(temporary, path)
 
 
 def discord_line(record: Mapping[str, Any]) -> str:
@@ -382,7 +382,10 @@ def push_inbox(
     inbox_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = inbox_path.with_suffix(".lua.tmp")
     temporary.write_text(text, encoding="utf-8")
-    os.replace(temporary, inbox_path)
+    # [2026-11-24 T-061] Inbox.lua sits in the game folder. On Windows os.replace raises
+    # PermissionError while any other program has it open (reproduced with a held file
+    # handle); replace_file retries briefly instead of failing the push outright.
+    replace_file(temporary, inbox_path)
     return {
         "action": "push",
         "addon": name,

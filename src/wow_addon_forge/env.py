@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import importlib
 import os
-from collections.abc import Sequence
+import sys
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -25,6 +27,74 @@ DEFAULT_ROOTS: tuple[str, ...] = (
     "/Applications/World of Warcraft",
     "C:\\Program Files (x86)\\World of Warcraft",
 )
+
+
+def example_root(platform: str | None = None) -> str:
+    """Return the default install root to show in hints for this platform.
+
+    Why this exists: a "pass root, for example ..." hint should name a path that
+        exists on the user's system, not a macOS path on Windows.
+    Args: platform, a ``sys.platform`` value; the running platform when ``None``.
+    Returns: the Windows default root on ``win32``, else the macOS default root.
+    Failure modes: none.
+    """
+    # [2026-11-24 T-061] The hint used to name the macOS root on every OS. The Windows
+    # root it now shows is where a live Forever install was found on Windows 11.
+    current = sys.platform if platform is None else platform
+    return DEFAULT_ROOTS[1] if current == "win32" else DEFAULT_ROOTS[0]
+
+
+def path_is_under(path: str, base: str, *, platform: str | None = None) -> bool:
+    """Return whether ``path`` is ``base`` or inside it, comparing as the OS does.
+
+    Why this exists: a plain ``startswith`` is wrong twice on Windows: separators may be
+        ``/`` or ``\\``, and ``C:\\WoW`` and ``c:\\wow`` are the same folder.
+    Args: path and base, as text; platform, a ``sys.platform`` value (running one when
+        ``None``). Windows compares case-insensitively; other systems compare exactly.
+    Returns: ``True`` when ``path`` equals ``base`` or continues it after a separator.
+    Failure modes: none; this is text-only and never touches the disk.
+    """
+    current = sys.platform if platform is None else platform
+    candidate = path.replace("\\", "/")
+    prefix = base.replace("\\", "/").rstrip("/")
+    if current == "win32":
+        candidate, prefix = candidate.lower(), prefix.lower()
+    return candidate == prefix or candidate.startswith(prefix + "/")
+
+
+def replace_file(
+    source: str | os.PathLike[str],
+    dest: str | os.PathLike[str],
+    *,
+    attempts: int = 5,
+    delay: float = 0.05,
+    replace: Callable[[Any, Any], None] = os.replace,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """Atomically move ``source`` over ``dest``, retrying a briefly locked destination.
+
+    Why this exists: on Windows, ``os.replace`` raises ``PermissionError`` while another
+        program holds the destination open, and antivirus scanners, the search indexer
+        and sync clients do that for a moment after a file changes. A short retry turns
+        that race into a non-event; a lock that outlasts it is still reported.
+    Args: source, the finished temporary file; dest, the file it replaces; attempts,
+        total tries (at least 1); delay, seconds before the first retry, doubled after
+        each; replace and sleep are injected by tests.
+    Returns: none.
+    Failure modes: the last ``PermissionError`` once every attempt failed; any other
+        ``OSError`` is raised at once, unretried.
+    """
+    tries = max(1, attempts)
+    wait = delay
+    for attempt in range(1, tries + 1):
+        try:
+            replace(source, dest)
+            return
+        except PermissionError:
+            if attempt == tries:
+                raise
+            sleep(wait)
+            wait *= 2
 
 
 def hermes_home_dir() -> Path:

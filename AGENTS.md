@@ -1,6 +1,6 @@
 # AGENTS.md — hermes-wow-plugin agent operating manual
 
-> **Version 1.0 — last updated 2026-11-11.** This file is law for every agent
+> **Version 1.1 — last updated 2026-11-24.** This file is law for every agent
 > session in this repo. Re-stamp the date on any edit; bump the version when a rule
 > or gate changes (not for snapshot facts); log rule changes in goose-deuce.md.
 
@@ -34,8 +34,15 @@ green commit, record where the work lives on the task, and stop cleanly.
 - **Platforms that must work:** macOS on Apple Silicon (live WoW: Forever client, Hermes
   Desktop) and Linux (Python + headless-Lua suite in CI) — the only acceptable
   evidence for a platform is a real command run on it; anything claimed about the live game
-  client needs an in-game run recorded in `docs/INGAME-CHECKLIST.md`. Windows install
-  layouts are handled in code and unit-tested with hostile paths, but not claimed.
+  client needs an in-game run recorded in `docs/INGAME-CHECKLIST.md`. Windows 11 (x64):
+  the full gate and `hermes plugins validate .` pass, and `wow_env` detection was run
+  against a live Forever install at `C:\Program Files (x86)\World of Warcraft` (T-061,
+  2026-11-24); the CI gate passed on `windows-latest`, `ubuntu-latest` and `macos-latest`
+  in a fork's CI run (Jabberwocky1989/hermes-wow-plugin run 45434501131, 2026-11-24).
+  An in-game run on Windows and the Hermes Desktop pane on Windows are not yet claimed.
+  Platform-specific code must also pass `uv run mypy --platform linux src` and
+  `--platform darwin src` (and `win32`): mypy narrows on `sys.platform`, so a check
+  run on one OS cannot see another OS's unreachable-code errors.
   Never claim a platform works from a run on a different one.
 - **Layout:**
 
@@ -85,6 +92,11 @@ green commit, record where the work lives on the task, and stop cleanly.
     `camelot`, retail 12.1.5 ("Midnight") API with secret values. `COMBAT_LOG_EVENT_UNFILTERED`
     is restricted and `CombatLogGetCurrentEventInfo` is absent. Never write addon code from
     memory of Classic or pre-12.0 APIs: look every call and event up in the API index first.
+  - **TOC file lines can carry load conditions** (`File.lua [AllowLoadGameType mainline]`).
+    Forever answers to `forever`, `camelot` and the `mainline` family, so a mainline-only file
+    DOES load. Lines can also hold path variables: `[Family]` is `Mainline` and `[Game]` is `Camelot` on
+    Forever, `[TextLocale]` is per player. `tocfile.files_loaded` and `toc_path_variants` own the rules;
+    never split TOC lines by hand (T-064, T-073).
   - **Addons have no network or file I/O.** Game → outside is SavedVariables, flushed only on
     `/reload` or logout. Outside → game is a data `.lua` file inside the addon folder that the
     TOC already lists (re-read on `/reload`; a NEW file needs a client restart).

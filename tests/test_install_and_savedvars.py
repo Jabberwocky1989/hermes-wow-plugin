@@ -6,12 +6,18 @@ The install lives under ``tmp_path``. Nothing here opens ``/Applications``.
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import sys
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from wow_addon_forge.apidocs import IndexStore
 from wow_addon_forge.env import RealFileSystem
 from wow_addon_forge.headless import minimal_api_index
+from wow_addon_forge.install import is_junction
 from wow_addon_forge.tools import ForgeTools
 
 _CLEAN_TOC = "## Interface: 16001\n## Title: Clean\n\nCore.lua\n"
@@ -159,7 +165,12 @@ def test_install_refuses_traversal_and_absolute_names(tmp_path: Path) -> None:
     wow = _wow(tmp_path)
     tools = _tools(tmp_path, wow)
     addons = wow / "_forever_" / "Interface" / "AddOns"
-    for hostile in ("../Evil", str(tmp_path / ".." / "Evil"), str(tmp_path / "src" / "C:Evil")):
+    # [2026-11-24 T-061] The drive-relative name is appended as text: on Windows,
+    # Path(...) / "C:Evil" silently drops "C:" when the base is on drive C:, so the
+    # hostile name never reached addon_name() and the test failed on Windows with
+    # bad-path instead of bad-argument (the guard itself was fine).
+    drive_relative = str(tmp_path / "src") + os.sep + "C:Evil"
+    for hostile in ("../Evil", str(tmp_path / ".." / "Evil"), drive_relative):
         payload = _install(tools, path=hostile)
         assert payload["ok"] is False, hostile
         assert payload["error"]["code"] == "bad-argument", hostile
@@ -173,7 +184,8 @@ def test_link_mode_symlinks_and_second_install_does_not_delete_source(tmp_path: 
     linked = _install(tools, path=str(source), mode="link")
     assert linked["ok"] is True
     dest = Path(linked["dest"])
-    assert dest.is_symlink()
+    # [2026-11-24 T-061] Windows without Developer Mode gets a junction instead.
+    assert dest.is_symlink() or is_junction(str(dest))
     assert dest.resolve() == source.resolve()
     # [2026-11-11 T-010] Replacing the link must unlink it, not rmtree the source.
     copied = _clean(tmp_path / "other")
@@ -183,6 +195,138 @@ def test_link_mode_symlinks_and_second_install_does_not_delete_source(tmp_path: 
     assert (source / "Core.lua").is_file()
     assert not dest.is_symlink()
     assert (dest / "Core.lua").read_text(encoding="utf-8") == _CLEAN_LUA
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="directory junctions are Windows-only")
+def test_link_mode_falls_back_to_junction_without_symlink_privilege(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    # [2026-11-24 T-061] Simulates a Windows account without Developer Mode: os.symlink
+    # fails with ERROR_PRIVILEGE_NOT_HELD, so link mode must make a junction, and a later
+    # install over that junction must remove only the junction, never the source tree.
+    def refuse_symlink(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError(None, "A required privilege is not held by the client", None, 1314)
+
+    monkeypatch.setattr(os, "symlink", refuse_symlink)
+    wow = _wow(tmp_path)
+    source = _clean(tmp_path)
+    tools = _tools(tmp_path, wow)
+    linked = _install(tools, path=str(source), mode="link")
+    assert linked["ok"] is True, linked
+    dest = Path(linked["dest"])
+    assert is_junction(str(dest))
+    assert (dest / "Core.lua").read_text(encoding="utf-8") == _CLEAN_LUA
+    copied = _clean(tmp_path / "other")
+    replaced = _install(tools, path=str(copied), mode="copy")
+    assert replaced["ok"] is True
+    assert (source / "Core.lua").is_file()
+    assert not is_junction(str(dest))
+    assert Path(replaced["backup"], "Core.lua").read_text(encoding="utf-8") == _CLEAN_LUA
+
+
+def test_link_mode_reraises_other_symlink_errors(tmp_path: Path, monkeypatch: Any) -> None:
+    # [2026-11-24 T-061] Only the missing-privilege error falls back to a junction.
+    def fail_symlink(*_args: Any, **_kwargs: Any) -> None:
+        raise PermissionError("disk is read-only")
+
+    monkeypatch.setattr(os, "symlink", fail_symlink)
+    wow = _wow(tmp_path)
+    source = _clean(tmp_path)
+    tools = _tools(tmp_path, wow)
+    payload = _install(tools, path=str(source), mode="link")
+    assert payload["ok"] is False
+    assert not (wow / "_forever_" / "Interface" / "AddOns" / "Clean").exists()
+
+
+def test_install_replaces_an_addon_holding_read_only_files(tmp_path: Path) -> None:
+    # [2026-11-24 T-061] A developer's addon clone holds read-only git object files. On
+    # Windows shutil.rmtree stopped with PermissionError on them (half-deleted addon,
+    # install-failed); now the read-only bit is cleared and the replace completes.
+    wow = _wow(tmp_path)
+    tools = _tools(tmp_path, wow)
+    first = _install(tools, path=str(_clean(tmp_path)))
+    assert first["ok"] is True
+    dest = Path(first["dest"])
+    locked = dest / ".git" / "objects" / "ab" / "cdef"
+    _write(locked, "blob\n")
+    locked.chmod(0o444)
+    replaced = _install(tools, path=str(_clean(tmp_path / "other")))
+    assert replaced["ok"] is True, replaced
+    assert not (dest / ".git").exists()
+    assert (dest / "Core.lua").read_text(encoding="utf-8") == _CLEAN_LUA
+    assert Path(replaced["backup"], ".git", "objects", "ab", "cdef").is_file()
+
+
+def _symlinks_allowed(tmp_path: Path) -> bool:
+    # [2026-11-24 T-062] Windows without Developer Mode or admin cannot make symlinks at
+    # all (WinError 1314); the junction test below covers that machine instead.
+    probe = tmp_path / "symlink-probe"
+    try:
+        os.symlink(tmp_path, probe, target_is_directory=True)
+    except OSError:
+        return False
+    probe.unlink()
+    return True
+
+
+def _assert_dangling_link_replaced(tmp_path: Path, wow: Path, source: Path) -> None:
+    # [2026-11-24 T-062] Shared tail of the dangling-link tests: the link install has
+    # happened and its source is deleted. Before T-062, fs.is_dir(dest) followed the
+    # dead link to False, so nothing was removed and every install failed with
+    # FileExistsError (WinError 183 on Windows).
+    tools = _tools(tmp_path, wow)
+    dest = wow / "_forever_" / "Interface" / "AddOns" / "Clean"
+    shutil.rmtree(source)
+    assert not dest.exists()
+    assert dest.is_symlink() or is_junction(str(dest))
+    dry = _install(tools, path=str(_clean(tmp_path / "other")), dry_run=True)
+    assert dry["ok"] is True, dry
+    assert dry["backup"] is None
+    assert "would replace a dangling link" in dry["note"]
+    assert dest.is_symlink() or is_junction(str(dest))
+    replaced = _install(tools, path=str(_clean(tmp_path / "other")))
+    assert replaced["ok"] is True, replaced
+    assert replaced["backup"] is None
+    assert replaced["action"] == "restart"
+    assert "; replaced a dangling link" in replaced["note"]
+    assert not dest.is_symlink()
+    assert not is_junction(str(dest))
+    assert (dest / "Core.lua").read_text(encoding="utf-8") == _CLEAN_LUA
+    assert not (tmp_path / "backups").exists()
+
+
+def test_reinstall_replaces_a_dangling_symlink(tmp_path: Path) -> None:
+    if not _symlinks_allowed(tmp_path):
+        pytest.skip("this account cannot create symlinks; the junction test covers it")
+    wow = _wow(tmp_path)
+    source = _clean(tmp_path)
+    linked = _install(_tools(tmp_path, wow), path=str(source), mode="link")
+    assert linked["ok"] is True, linked
+    assert Path(linked["dest"]).is_symlink()
+    _assert_dangling_link_replaced(tmp_path, wow, source)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="directory junctions are Windows-only")
+def test_reinstall_replaces_a_dangling_junction(tmp_path: Path, monkeypatch: Any) -> None:
+    def refuse_symlink(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError(None, "A required privilege is not held by the client", None, 1314)
+
+    wow = _wow(tmp_path)
+    source = _clean(tmp_path)
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "symlink", refuse_symlink)
+        linked = _install(_tools(tmp_path, wow), path=str(source), mode="link")
+    assert linked["ok"] is True, linked
+    assert is_junction(linked["dest"])
+    _assert_dangling_link_replaced(tmp_path, wow, source)
+
+
+def test_is_junction_is_false_for_plain_entries(tmp_path: Path) -> None:
+    (tmp_path / "dir").mkdir()
+    (tmp_path / "file.txt").write_text("x", encoding="utf-8")
+    assert is_junction(str(tmp_path / "dir")) is False
+    assert is_junction(str(tmp_path / "file.txt")) is False
+    assert is_junction(str(tmp_path / "missing")) is False
 
 
 def test_savedvars_rejects_binary_chunk_and_default_data_dir_follows_profile(

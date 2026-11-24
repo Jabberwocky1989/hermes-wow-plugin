@@ -649,3 +649,88 @@ def test_wow_check_and_wow_test_reject_binary_lua_chunks(
         clients=1,
     )
     assert ok_case is False and "binary chunks are not allowed" in msg_case
+
+
+def _conditional_addon(directive: str) -> tuple[str, dict[str, str]]:
+    base = "/addons/Cond"
+    toc = f"## Interface: 16001\n## Title: Cond\n\nMain.lua\nClassic.lua{directive}\n"
+    return base, {
+        f"{base}/Cond.toc": toc,
+        f"{base}/Main.lua": "CondMain = true\n",
+        f"{base}/Classic.lua": "CondClassic = GetClassicOnlyThing()\n",
+    }
+
+
+def test_check_skips_files_whose_toc_condition_excludes_forever(
+    fake_fs_factory: Any, tmp_path: Path
+) -> None:
+    # [2026-11-24 T-064] Control first: listed plainly, the Classic-only call IS a finding,
+    # so the clean result below proves the condition was honoured, not that nothing ran.
+    base, files = _conditional_addon("")
+    plain = _check(fake_fs_factory, files, base, tmp_path)
+    assert any(item["file"] == "Classic.lua" for item in plain["findings"]), plain
+    base, files = _conditional_addon(" [AllowLoadGameType vanilla, tbc]")
+    payload = _check(fake_fs_factory, files, base, tmp_path)
+    assert payload["verdict"] == "pass", payload["findings"]
+    assert payload["findings"] == []
+
+
+def test_check_and_test_report_condition_excluded_files(
+    fake_fs_factory: Any, tmp_path: Path
+) -> None:
+    # [2026-11-24 T-072] Before T-072 an excluded file vanished from both results: no
+    # finding, no field. Now each names the file and why, and the verdict is unchanged.
+    base, files = _conditional_addon(" [AllowLoadGameType vanilla, tbc]")
+    files[f"{base}/Tests/suite.lua"] = 'test("main_ran", function() assert(CondMain) end)\n'
+    payload = _check(fake_fs_factory, files, base, tmp_path)
+    assert payload["verdict"] == "pass"
+    assert [item["file"] for item in payload["skipped_files"]] == ["Classic.lua"]
+    assert "vanilla" in payload["skipped_files"][0]["reason"]
+    tested = run_addon_tests(base, index=_index(), fs=fake_fs_factory(files))
+    assert tested["verdict"] == "pass", tested["results"]
+    assert tested["skipped_files"] == payload["skipped_files"]
+
+
+def test_skipped_files_is_empty_when_nothing_is_excluded_or_no_toc(
+    fake_fs_factory: Any, tmp_path: Path
+) -> None:
+    base, files = _conditional_addon("")
+    assert _check(fake_fs_factory, files, base, tmp_path)["skipped_files"] == []
+    no_toc = {f"{base}/Main.lua": "CondMain = true\n"}
+    assert _check(fake_fs_factory, no_toc, base, tmp_path)["skipped_files"] == []
+    assert run_addon_tests(base, index=_index(), fs=fake_fs_factory(no_toc))["skipped_files"] == []
+
+
+def test_test_report_uses_the_headless_locale_for_locale_conditions(
+    fake_fs_factory: Any, tmp_path: Path
+) -> None:
+    # wow_check covers every locale, so a deDE-only file is checked; the headless client
+    # is enUS, so wow_test reports that file as one its cases ran without.
+    base, files = _conditional_addon(" [AllowLoadTextLocale deDE]")
+    files[f"{base}/Classic.lua"] = "CondGerman = true\n"
+    assert _check(fake_fs_factory, files, base, tmp_path)["skipped_files"] == []
+    tested = run_addon_tests(base, index=_index(), fs=fake_fs_factory(files))
+    assert [item["file"] for item in tested["skipped_files"]] == ["Classic.lua"]
+
+
+def test_check_compiles_every_locale_variant_and_family_file(
+    fake_fs_factory: Any, tmp_path: Path
+) -> None:
+    # [2026-11-24 T-073] A syntax error in any locale's file is found, because some player
+    # loads it; a [Family] line checks the Mainline file Forever loads.
+    base = "/addons/Vars"
+    files = {
+        f"{base}/Vars.toc": "## Interface: 16001\n## Title: Vars\n[Family]/Core.lua\n"
+        "Locale/[TextLocale].lua\n",
+        f"{base}/Mainline/Core.lua": "VarsCore = true\n",
+        f"{base}/Locale/enUS.lua": 'VarsText = "hi"\n',
+        f"{base}/Locale/deDE.lua": 'VarsText = "hallo"\nlocal broken = (\n',
+    }
+    payload = _check(fake_fs_factory, files, base, tmp_path)
+    assert payload["verdict"] == "fail"
+    assert [item["file"] for item in payload["findings"] if item["severity"] == "error"] == [
+        "Locale/deDE.lua"
+    ]
+    files[f"{base}/Locale/deDE.lua"] = 'VarsText = "hallo"\n'
+    clean = _check(fake_fs_factory, files, base, tmp_path)
+    assert clean["verdict"] == "pass", clean["findings"]

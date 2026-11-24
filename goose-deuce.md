@@ -123,6 +123,94 @@ tag, choose the owing one.
 <!-- Real entries accumulate below, NEWEST AT THE TOP. The top entries are
      session-start required reading (count: AGENTS.md → Session ritual). -->
 
+## 2026-11-24 — T-073 load rules for Bootstrap, LoadIntoEnvironment and locale variables  [decision]
+- Task: T-073 / T-074
+- What: `[Bootstrap]` never excludes a file (loaded and checked like any other); `[LoadIntoEnvironment Secure]` excludes it; `[RegionalTextLocale]` takes the same value as `[TextLocale]` when a locale is given (right for an NA enUS client); a static check widens locale variables to the 11 client locales (13 for RegionalTextLocale, adding enGB and ptPT) and accepts a line when any variant exists. Directive-bearing `##` lines drop their directives and are ignored when the conditions exclude Forever. This closes the "Not covered" list in the entry "Inline TOC conditions and Windows-reserved names found reading the live install" except one new finding: the wiki says a repeated `##` key uses the LAST value, while `parse_toc` keeps the first (T-003's unverified choice); filed as T-074.
+- Why: The wiki gives Bootstrap only as "restricts to the bootstrap process for LoadOnDemand addons", which the headless loader does not model; loading it errs toward checking more code. Secure is Blizzard-only per the wiki. None of this is verified in game; the in-game tasks (T-036, T-063) are where it would be.
+- Where: `src/wow_addon_forge/tocfile.py` (`file_skip_reason`, `expand_toc_variables`, `toc_path_variants`, `parse_toc`); `TASKS.md`.
+- Plan: T-073 Accept ("a stated load rule") → stated here and in the docstrings. docs/PLAN.md not falsified.
+- Commit(s): this commit
+
+## 2026-11-24 — T-067's "no build in its files" was false; T-069 dropped  [process]
+- Task: T-071 (corrects T-067; drops T-069)
+- What: T-067 shipped the statement that Ketho/BlizzardInterfaceResources "publishes no build number in its files" (sync text, `describe_resource_lists` docstring, the goose-deuce entry "T-067 says the resource build is unknown instead of comparing it", and T-069's Why). Its README.md, on the already-allowed `raw.githubusercontent.com`, carries `GetBuildInfo() => "1.60.1", "70938", …` and changes in every build commit; a cold audit found it. T-071 reads the build from the README and warns when it differs from the documentation build, which is T-067's original Accept. T-067's test `test_zf_…build_is_unknown` pinned the false text and was replaced by three stronger tests (equal, different, unreadable or unparsable). T-069 (allow `api.github.com`) is dropped: the build is readable without a second host.
+- Why: T-067 searched only the `Resources/` files' first lines and took "not found there" as "not published".
+- Where: `src/wow_addon_forge/apidocs.py` (`_read_resource_build`, `describe_resource_lists`, `build_index`); `tests/test_apidocs.py`; `TASKS.md`.
+- Plan: T-067 Accept (name the build, warn on a difference) → now met by T-071; the earlier entry's "neither case can occur" is false. docs/PLAN.md not falsified.
+- Commit(s): this commit
+
+## 2026-11-24 — Records from T-064 to T-066 overclaimed; corrected  [process]
+- Task: T-070 (corrects T-064, T-065, T-066)
+- What: A cold audit found shipped records asserting unexercised behaviour, against AGENTS.md's honesty bound. (1) The T-065 CHANGELOG line said the four unit calls go secret "while a restriction is active, as the 1.60.1 index documents"; the index ties each to a specific condition and only the simulator uses any restriction. (2) The T-066 CHANGELOG line said "as the live client provides them", and its code comment called MinValue/MaxValue "assumed from their names, not observed" when the Gethe documentation states them per enumeration. (3) The T-064 commit body's `Docs:` line omits goose-deuce.md, which that commit changed. (4) A stray blank line in CHANGELOG.md. Fixed: (1), (2) and (4) are corrected in place with a T-070 CHANGELOG line saying so; the measured match (880 of 887 enums on 71091, 7 named) replaces the guess. (3) stays: AGENTS.md forbids rewriting history, so this entry is the correction.
+- Why: Each statement was written from what was expected, not from what was checked; the CHANGELOG had no test to catch it.
+- Where: `CHANGELOG.md`; `src/wow_addon_forge/apidocs.py` (`_ENUM_META_CHUNK` comment); commit 1d24cf5 (T-064) message.
+- Plan: AGENTS.md comment standard and Definition of Done (true attestations) → corrected in this commit. docs/PLAN.md not falsified.
+- Commit(s): this commit
+
+## 2026-11-24 — T-067 says the resource build is unknown instead of comparing it  [scope]
+- Task: T-067 / T-069
+- What: The Accept asked status and sync to name the resource lists' build and warn when it differs from the documentation build, with tests for equal, different and unknown. Ketho/BlizzardInterfaceResources publishes its build only in commit messages (`1.60.1 (70938)`), not in any fetched file, so the build is always unknown: the index and status carry `resource_lists`, one sentence naming the files and origin and saying their build is unknown and may differ. No comparison or difference warning was built, because neither case can occur.
+- Why: Reading commit messages needs `api.github.com`, which the fetcher refuses by design (only `raw.githubusercontent.com` passes; `UrlFetcher`, since T-005). Widening that allowlist is a security call for the owner, filed as T-069. A permanent "unknown" warning on every sync would bury real warnings, so it is a status field, not a warning.
+- Where: `src/wow_addon_forge/apidocs.py` (`describe_resource_lists`, `SourceBundle.resource_origin`, `ApiIndex.status`); `TASKS.md`.
+- Plan: T-067 Accept (name build, warn on difference) → names origin, says build unknown; the comparison waits on T-069. docs/PLAN.md not falsified.
+- Commit(s): this commit
+
+## 2026-11-24 — T-066 Accept named LFG_ROLE_ANY as a lookup name  [approach]
+- Task: T-066
+- What: The Accept said `wow_api lookup LFG_ROLE_ANY` is found. `LFG_ROLE_ANY` is a value inside the documented table `Constants.LFG_ROLEConstants`, not an entry of its own, so the check is `wow_api lookup Constants.LFG_ROLEConstants` showing `LFG_ROLE_ANY: 3` and `LFG_ROLE_NO_ROLE: -1`. The Meta tables are derived from `Enum.X` (count, min, max of its numeric values) rather than hard-coded for LFGRole.
+- Why: The index stores Constants members as a table's `values`, the same as every other Constants table; the wrong name was in the task text, not the index. Deriving covers any future `Enum.*Meta` read, not only LFGRole.
+- Where: `TASKS.md` (T-066 Accept); `src/wow_addon_forge/apidocs.py` (`_ENUM_META_CHUNK`).
+- Plan: T-066 Accept as written → corrected in the same commit. docs/PLAN.md not falsified.
+- Commit(s): this commit
+
+## 2026-11-24 — T-062 picked before its dependency T-061 closed  [process]
+- Task: T-062 / T-061
+- What: T-062 (`Depends: T-061`) was claimed and closed while T-061 is still `[~]`. That breaks PICK's rule that every dependency is `[x]` and the one-open-task rule. The symlink half of the regression test skips on an account that cannot create symlinks (Windows without Developer Mode or admin); the task said "for a symlink on every OS". On such an account the junction test covers the same path.
+- Why: The owner asked for T-062 directly. T-061's code is committed (the dependency was on its junction code); only its CI run is still open, and that waits on the owner enabling Actions on the fork. A symlink cannot be made on such an account, so the test cannot run there.
+- Where: `TASKS.md`; `tests/test_install_and_savedvars.py` (`_symlinks_allowed`).
+- Plan: AGENTS.md task loop (PICK) → T-062 closed in its own commit on top of T-061 and T-064. docs/PLAN.md not falsified.
+- Commit(s): this commit
+
+## 2026-11-24 — T-064 opened while T-061 is still DOING  [process]
+- Task: T-064 / T-061
+- What: T-064 was queued, claimed and worked while T-061 is still `[~]`, against "Never open a second task while one is genuinely `[~]`". Both tasks' changes sit uncommitted in the same working tree; `check.py` carries hunks from both.
+- Why: The owner of this clone asked for both review findings to be fixed now. T-061's code is finished; only its CI Accept item is still open, and that needs an owner-approved push.
+- Where: `TASKS.md`; `src/wow_addon_forge/check.py` (T-061: `path_is_under` in `run_addon_tests`; T-064: the `files_loaded` filter before stage 2).
+- Plan: AGENTS.md task loop (one open task) → kept as two tasks with two commits. T-061 commits first, with only its `check.py` hunk staged; T-064 commits second. docs/PLAN.md not falsified.
+- Commit(s): this commit
+
+## 2026-11-24 — Inline TOC conditions and Windows-reserved names found reading the live install  [extra]
+- Task: T-064
+- What: Unplanned. `parse_toc` takes inline `[AllowLoad…]` / `[ExcludeLoad…]` directives off file lines and keeps them per file. One rule set (`file_skip_reason`) decides which files Forever loads; the headless loader and `wow_check`'s Lua stages use it. `lint_toc` warns `unknown-inline-directive` and `windows-reserved-name`, and `wow_new` refuses Windows device names (`bad-name`). Forever matches the game types `forever` and `camelot` and the `mainline` family, per warcraft.wiki.gg "TOC format" (read 2026-11-24). The rule that a list naming only unrecognised types still loads uses the wiki's own game-type table as the recognised set; that is an assumption, not tested in game. Headless judges `AllowLoadTextLocale` against `enUS`.
+- Why: A read-only pass of the plugin's own readers over the live Windows install (T-061 review) found 169 file lines in 8 installed addons that `wow_check` reported as missing. The headless loader skipped those files without saying so, against the "errors are surfaced" standard. Separately, `wow_new` named an addon `NUL` and failed with WinError 3, while `CON`, `AUX` and `COM1` were accepted on Windows 11 build 26300.
+- Where: `src/wow_addon_forge/tocfile.py`, `headless/runtime.py`, `check.py`, `scaffold.py`; `tests/test_tocfile.py`, `test_headless.py`, `test_check.py`, `test_scaffold.py`; `AGENTS.md` foot-gun list.
+- Plan: SPEC-PLUGIN's TOC rules did not mention inline directives → handled. Not covered: inline directives on `##` header lines, the addon-level `## AllowLoadGameType` header, and path variables such as `[TextLocale]`, which still stay in the path unchanged. docs/PLAN.md not falsified.
+- Commit(s): this commit
+
+## 2026-11-24 — Windows port leaves the dangling-link reinstall and in-game run open  [tech-debt]
+- Task: T-061
+- What: Two known gaps are knowingly left unfixed. (1) A dangling link at the install destination (source moved or deleted after a link-mode install) blocks every later `wow_install` with FileExistsError; it predates T-061 for symlinks on every OS and now also applies to junctions. (2) Nothing was loaded in the Windows game client; Windows evidence is headless plus a read-only `wow_env` run against a live install.
+- Why: (1) is outside T-061's Windows scope (pre-existing, all OSes) and is filed rather than fixed as a drive-by. (2) needs the owner at the game client; a junction-installed addon loading in game is the open claim.
+- Where: `src/wow_addon_forge/install.py` (`install_addon`, `existed = fs.is_dir(dest)`).
+- Plan: no plan line covered Windows → T-062 (dangling link) and T-063 (in-game Windows acceptance, `Gated: owner`) added to `## Later` in this commit. docs/PLAN.md not falsified.
+- Commit(s): this commit
+
+## 2026-11-24 — Windows support added as an unqueued task; one gate rule added  [process]
+- Task: T-061
+- What: T-061 was created and worked in one session without first being queued, claimed, or run through the session-start ritual, at the request of a local user of a clone (not the upstream owner). AGENTS.md now also requires `mypy --platform linux|darwin|win32` for platform-specific code (version 1.0 → 1.1).
+- Why: The work started as a Windows feasibility question and grew into fixes. The gate rule comes from a real miss: the Windows-only `mypy src` was clean while `mypy --platform linux src` and `--platform darwin src` each reported 3 `[unreachable]` errors in `install.py` (found by an independent verifier run, reproduced in this session), which would have turned macOS and Linux CI red.
+- Where: `AGENTS.md` (version line, Project snapshot platform paragraph), `TASKS.md`.
+- Plan: AGENTS.md task loop (PICK → CLAIM → …) → T-061 now sits in `## Now` as `[~]` DOING; it closes only after its CI Accept runs on all three OSes, which needs an owner-approved push. docs/PLAN.md not falsified.
+- Commit(s): this commit
+
+## 2026-11-24 — Windows support: junction fallback, read-only removal, path and retry fixes  [extra]
+- Task: T-061
+- What: Unplanned Windows port. Link mode falls back to a directory junction (`_winapi.CreateJunction`, CPython-private, present 3.11–3.14) on WinError 1314; `remove_dest` removes junctions with `os.rmdir` and clears read-only bits during `rmtree`; `replace_file` retries `os.replace` on PermissionError (about 0.75 s total); `path_is_under` makes `wow_test` path matching separator-agnostic, case-insensitive on Windows, and boundary-aware; the no-install hint shows the Windows root on Windows; CI adds `windows-latest` with bash steps. A Windows install-discovery lookup via the registry was evaluated and rejected: the test machine's live install wrote no WoW registry key, so the key names could not be confirmed.
+- Why: Windows run of the suite on 2026-11-24: 412/413 passed; the failure was a test whose `Path / "C:Evil"` dropped the drive on Windows. The read-only removal failure was reproduced with WinError 5 on the pre-fix code; the `wow_test` path mismatch with "Test path not found" on the pre-fix code. Using `_winapi` keeps the README promise of no shell commands (`mklink /J` would break it).
+- Where: `src/wow_addon_forge/env.py`, `install.py`, `bridge.py`, `apidocs.py`, `check.py`, `tools.py`; `tests/test_install_and_savedvars.py`, `tests/test_windows_paths.py`; `.github/workflows/ci.yml`.
+- Plan: docs/PLAN.md and AGENTS.md named macOS and Linux only → Windows is now partly claimed (AGENTS.md snapshot, headless and install-folder evidence only). docs/PLAN.md folded at the next sweep.
+- Commit(s): this commit
+
 ## 2026-11-11 — Catalog review sandbox hardening and active-profile cache resolution  [extra]
 - Task: T-060 (`docs/SPEC-PLUGIN.md` §3, §5, §6; catalog PR NousResearch/hermes-agent#154059)
 - What: Three catalog-review changes shipped ahead of T-059's remaining live check: (1) `_SANDBOX_CHUNK` sets `string.dump = nil` and wraps `loadstring` and `load` (over captured C upvalues) to return `nil, "binary chunks are not allowed"` on `\27`-prefixed strings or reader streams, and Python rejects `\x1b`-prefixed source before `run_chunk`, `run_chunk_value`, `check_syntax`, `SimulatedClient.load_addon` (`run_addon_chunk`), `luacheck._compile_and_dump` (which uses `sandbox=False`), `savedvars.parse_savedvars_lua`, and `wow_test`; (2) `luavm.new_runtime` passes an `attribute_filter` to `lua51.LuaRuntime` that raises `AttributeError` on every attribute get/set against Python objects; (3) `default_cache_dir`, `default_data_dir`, and `default_cursor_dir` delegate to `env.hermes_home_dir()`, which calls `hermes_constants.get_hermes_home()` dynamically inside Hermes and falls back to `$HERMES_HOME` → `~/.hermes` in standalone CLI and CI runs.

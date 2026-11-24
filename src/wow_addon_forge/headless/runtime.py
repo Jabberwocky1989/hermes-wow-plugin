@@ -41,6 +41,8 @@ __all__ = [
     "RESTRICTION_STATE",
     "RESTRICTION_TYPE",
     "SEND_RESULT",
+    "HEADLESS_CLIENT_INTERFACE",
+    "HEADLESS_LOCALE",
     "HeadlessError",
     "LuaErrorRecord",
     "SimulatedClient",
@@ -138,6 +140,31 @@ _CORE_FUNCTIONS: tuple[str, ...] = (
     "GetBuildInfo",
 )
 
+# [2026-11-24 T-065] The secret metadata of the core functions whose returns the
+# synced 1.60.1.71091 index marks secret (copied from that index's entries; every
+# other core function there has `returns: false`). The minimal index carries it so a
+# default World makes these calls secret under a restriction, exactly as a World
+# built on the synced index does; with plain entries the addons' secret-name
+# fallbacks were never reached by any test.
+_CORE_SECRET_RETURNS: dict[str, dict[str, Any]] = {
+    "UnitName": {
+        "args": "AllowedWhenTainted",
+        "conditions": ("SecretWhenUnitNameIdentityRestricted",),
+    },
+    "UnitFullName": {
+        "args": "AllowedWhenUntainted",
+        "conditions": ("SecretWhenUnitIdentityRestricted",),
+    },
+    "UnitGUID": {
+        "args": "AllowedWhenUntainted",
+        "conditions": ("SecretWhenUnitIdentityRestricted",),
+    },
+    "UnitIsUnit": {
+        "args": "AllowedWhenUntainted",
+        "conditions": ("SecretWhenUnitComparisonRestricted",),
+    },
+}
+
 _CORE_EVENTS: tuple[str, ...] = (
     "ADDON_LOADED",
     "PLAYER_LOGIN",
@@ -191,6 +218,13 @@ _ALWAYS_NAMESPACES: tuple[str, ...] = (
 # [2026-11-11 T-007] The throttle model is two token buckets refilled from the
 # virtual clock: a burst of ten messages is legal, the sustained rate is one per
 # second, and advancing scenario time is the only way tokens come back.
+# [2026-11-24 T-064] The client text locale inline `[AllowLoadTextLocale …]` TOC conditions
+# are judged against. The headless world provides no GetLocale, so this only decides which
+# locale-restricted files load; enUS is an assumption, not a modelled client setting.
+HEADLESS_LOCALE = "enUS"
+# [2026-11-24 T-072] The client Interface number the headless loader picks a TOC for;
+# wow_test's skipped-file report reads the same constant so both choose the same TOC.
+HEADLESS_CLIENT_INTERFACE = 16001
 _BUCKET_CAPACITY = 10.0
 _BUCKET_REFILL_PER_SECOND = 1.0
 _MAX_REGISTERED_PREFIXES = 255
@@ -262,6 +296,8 @@ class _LoadedAddon:
     name: str
     path: str
     toc: tocfile.TocFile
+    # [2026-11-24 T-064] TOC files the inline conditions excluded, with the reason.
+    skipped: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass
@@ -339,6 +375,13 @@ def minimal_api_index(
         entry["returns"] = []
         entry["flags"] = {}
         entry["c_api"] = True
+        secret = _CORE_SECRET_RETURNS.get(name)
+        if secret is not None:
+            entry["secret"] = {
+                "args": secret["args"],
+                "returns": True,
+                "conditions": list(secret["conditions"]),
+            }
         entries["function"][name] = entry
     for event_name in dict.fromkeys((*_CORE_EVENTS, *extra_events)):
         name = str(event_name)
@@ -1235,6 +1278,29 @@ class SimulatedClient:
         """
         return tuple(addon.name for addon in self._loaded_addons)
 
+    def skipped_files(self, addon_name: str) -> tuple[tuple[str, str], ...]:
+        """Return the TOC files of a loaded addon this client did not load, with reasons.
+
+        Why this exists:
+            [2026-11-24 T-064] A file whose inline TOC condition excludes WoW: Forever is
+            skipped on purpose, as the client skips it; recording it keeps that skip visible
+            instead of silent.
+
+        Args:
+            addon_name: The addon's folder name, as returned by ``load_addon``.
+
+        Returns:
+            ``(path, reason)`` pairs in TOC order; empty when every listed file loaded or
+            the addon is not loaded.
+
+        Failure modes:
+            None.
+        """
+        for addon in self._loaded_addons:
+            if addon.name == addon_name:
+                return addon.skipped
+        return ()
+
     def _record_error(self, message: Any, stack: Any = "") -> None:
         self.errors.append(
             LuaErrorRecord(
@@ -1263,6 +1329,78 @@ class SimulatedClient:
             return 0
         return None
 
+    @staticmethod
+    def _has_secret_returns(entry: Mapping[str, Any] | None) -> bool:
+        secret = entry.get("secret") if entry is not None else None
+        return isinstance(secret, Mapping) and secret.get("returns") is True
+
+    def _secret_returns_active(self, entry: Mapping[str, Any] | None) -> bool:
+        """Say whether a call to ``entry``'s function returns secret values right now.
+
+        Why this exists:
+            [2026-11-24 T-065] One rule for every simulated function, generated stub or
+            hand-written: an index entry whose ``secret.returns`` is true returns secret
+            values while any restriction regime is active. The entry's ``conditions``
+            (for example ``SecretWhenUnitNameIdentityRestricted``) are not matched to a
+            regime, because nothing in the index says which regime sets which condition;
+            treating every regime as setting them is the T-034 simplification, kept.
+
+        Args:
+            entry: The function's index entry, or None for a function the index lacks.
+
+        Returns:
+            True when the entry has secret returns and a restriction is active.
+
+        Failure modes:
+            None.
+        """
+        return self._has_secret_returns(entry) and bool(self._active_restrictions)
+
+    def _secret_or_nil(self, value: Any) -> Any:
+        # [2026-11-24 T-065] nil stays nil: a missing return has no value to hide.
+        # Whether the live client makes a nil return secret is unobserved.
+        if value is None or self._controller is None:
+            return value
+        return self._controller.make_secret()
+
+    def _honour_secret_returns(
+        self, full_name: str, function: Callable[..., Any]
+    ) -> Callable[..., Any]:
+        """Wrap a hand-written function so it follows its index entry's secret returns.
+
+        Why this exists:
+            [2026-11-24 T-065] Generated stubs read the index's secret metadata, but the
+            hand-written ``UnitName``, ``UnitFullName``, ``UnitGUID`` and ``UnitIsUnit``
+            returned plain values under every restriction, so no test reached the
+            addons' secret-name fallbacks. Wrapping at install time keeps each
+            hand-written body about game state and puts the secrecy rule in one place.
+
+        Args:
+            full_name: The function's index name (``"UnitName"``, ``"C_Timer.After"``).
+            function: The hand-written Python implementation.
+
+        Returns:
+            ``function`` itself when the World's index gives it no secret returns;
+            otherwise a wrapper that, while ``_secret_returns_active``, replaces every
+            non-nil return value with a fresh secret and keeps the number of returns.
+
+        Failure modes:
+            None of its own; errors from ``function`` propagate unchanged.
+        """
+        entry = self._world.functions_by_name.get(full_name)
+        if not self._has_secret_returns(entry):
+            return function
+
+        def wrapped(*args: Any) -> Any:
+            result = function(*args)
+            if not self._secret_returns_active(entry):
+                return result
+            if isinstance(result, tuple):
+                return tuple(self._secret_or_nil(value) for value in result)
+            return self._secret_or_nil(result)
+
+        return wrapped
+
     def _make_stub(self, full_name: str, entry: Mapping[str, Any]) -> Callable[..., Any]:
         cached = self._stub_cache.get(full_name)
         if cached is not None:
@@ -1277,13 +1415,9 @@ class SimulatedClient:
         def stub(*_args: Any) -> Any:
             # [2026-11-11 T-034] A documented secret return is opaque only while
             # a restriction regime is active. Unrestricted calls keep the typed default.
-            secret = entry.get("secret")
-            if (
-                isinstance(secret, Mapping)
-                and secret.get("returns") is True
-                and self._active_restrictions
-                and self._controller is not None
-            ):
+            # [2026-11-24 T-065] The rule now lives in _secret_returns_active, shared
+            # with the hand-written functions, so the two paths cannot disagree.
+            if self._secret_returns_active(entry) and self._controller is not None:
                 return self._controller.make_secret()
             # [2026-11-11 T-007] Defaults are built per call, not once, so a
             # table default is a fresh Lua table each time; addon code that
@@ -1391,7 +1525,9 @@ class SimulatedClient:
             "GetBuildInfo": self._global_get_build_info,
         }
         for global_name, function in globals_to_install.items():
-            controller.set_global_function(global_name, function)
+            controller.set_global_function(
+                global_name, self._honour_secret_returns(global_name, function)
+            )
 
     def _install_namespaces(self, controller: Any, runtime: Any) -> None:
         # [2026-11-11 T-007] Namespace functions are dot functions in WoW, so
@@ -1426,7 +1562,9 @@ class SimulatedClient:
         for namespace in sorted(self._world.c_namespaces):
             methods_table = runtime.table()
             for method_name, function in real_methods.get(namespace, {}).items():
-                methods_table[method_name] = function
+                methods_table[method_name] = self._honour_secret_returns(
+                    f"{namespace}.{method_name}", function
+                )
             controller.install_namespace(namespace, methods_table)
 
     def _resolve_unit(self, unit: Any) -> SimulatedClient | None:
@@ -1906,7 +2044,7 @@ class SimulatedClient:
         # [2026-11-11 T-007] The TOC choice mirrors env detection: an Interface
         # match for this client wins, then the base folder TOC, then the first
         # candidate; loading and detection must never read different addons.
-        client_interface = 16001
+        client_interface = HEADLESS_CLIENT_INTERFACE
         for candidate_name, candidate_toc in parsed:
             if client_interface in candidate_toc.interface:
                 return (candidate_name, candidate_toc)
@@ -1965,7 +2103,11 @@ class SimulatedClient:
                     self._restore_saved_variable(var, self.account_saved_variables)
                 elif var in self.character_saved_variables:
                     self._restore_saved_variable(var, self.character_saved_variables)
-        record = _LoadedAddon(name=addon_name, path=addon_dir, toc=loaded_toc)
+        # [2026-11-24 T-064] Only the files the Forever client would load: inline TOC
+        # conditions are judged for its game types and an enUS client, the locale this
+        # headless world models. Skipped files are kept on the record, never dropped quietly.
+        files_to_load, skipped = loaded_toc.files_loaded(locale=HEADLESS_LOCALE)
+        record = _LoadedAddon(name=addon_name, path=addon_dir, toc=loaded_toc, skipped=skipped)
         for position, existing in enumerate(self._loaded_addons):
             if existing.name == addon_name:
                 self._loaded_addons[position] = record
@@ -1976,7 +2118,7 @@ class SimulatedClient:
         # file of this addon and by no other addon: that sharing boundary is
         # exactly the contract `local addonName, ns = ...` relies on.
         namespace_table = self._runtime.table()
-        for relative_file in loaded_toc.files:
+        for relative_file in files_to_load:
             if not relative_file.lower().endswith(".lua"):
                 continue
             file_path = self._fs.join(addon_dir, *relative_file.split("/"))

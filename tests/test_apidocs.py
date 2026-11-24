@@ -235,6 +235,17 @@ _TOC = (
 _GETHE = "https://raw.githubusercontent.com/Gethe/wow-ui-source/forever"
 _KETHO = "https://raw.githubusercontent.com/Ketho/BlizzardInterfaceResources/forever/Resources"
 _DOC_DIR = f"{_GETHE}/Interface/AddOns/Blizzard_APIDocumentationGenerated"
+_KETHO_README = (
+    "https://raw.githubusercontent.com/Ketho/BlizzardInterfaceResources/forever/README.md"
+)
+
+
+def _readme(version: str, build: str) -> str:
+    """Return a README shaped like the resource mirror's (checked 2026-11-24)."""
+    return (
+        "# BlizzardInterfaceResources\n```lua\n"
+        f'GetBuildInfo() => "{version}", "{build}", "Nov 12 2026", 16001\n```\n'
+    )
 
 
 def fixture_bundle() -> SourceBundle:
@@ -258,6 +269,9 @@ def fixture_mirror_files() -> dict[str, str]:
         files[f"{_DOC_DIR}/{name}"] = text
     for name, text in _RESOURCES.items():
         files[f"{_KETHO}/{name}"] = text
+    # [2026-11-24 T-071] The resource mirror's README carries the dump's build; the
+    # fixture states the same build as version.txt, so the default case is "equal".
+    files[_KETHO_README] = _readme("1.60.1", "70888")
     return files
 
 
@@ -840,3 +854,132 @@ def test_za_export_toc_refuses_escaping_file_names() -> None:
     assert bundle is not None
     assert sorted(bundle.documentation) == ["ForgeExportDocumentation.lua"]
     assert any("Evil.lua" in warning for warning in bundle.warnings)
+
+
+# [2026-11-24 T-066] A Constants table that reads Enum.XMeta while it is built, the way
+# the live LFGConstantsDocumentation.lua reads Enum.LFGRoleMeta.NumValues.
+_META_READING_DOC = """
+APIDocumentation:AddDocumentationTable({
+    Name = "ForgeMetaConstants",
+    Tables = {
+        {
+            Name = "FORGE_ASPECTConstants",
+            Type = "Constants",
+            Values = {
+                { Name = "FORGE_ASPECT_COUNT", Type = "number",
+                  Value = Enum.ForgeAspectMeta.NumValues },
+                { Name = "FORGE_ASPECT_LOW", Type = "number",
+                  Value = Enum.ForgeAspectMeta.MinValue },
+                { Name = "FORGE_ASPECT_HIGH", Type = "number",
+                  Value = Enum.ForgeAspectMeta.MaxValue },
+            },
+        },
+    },
+})
+"""
+
+
+def test_zc_documentation_reading_enum_meta_tables_loads() -> None:
+    """ZC: Enum.XMeta is derived from Enum.X, so a Meta-reading file indexes cleanly."""
+    bundle = fixture_bundle()
+    del bundle.documentation["BrokenDocumentation.lua"]
+    bundle.documentation["ForgeMetaConstantsDocumentation.lua"] = _META_READING_DOC
+    data = built_data(bundle)
+    assert data["warnings"] == []
+    constants = entry(data, "table", "Constants.FORGE_ASPECTConstants")
+    # Enum.ForgeAspect is { Text = 1, Alpha = 2 } in the fixture LuaEnum.lua.
+    assert constants["values"] == {
+        "FORGE_ASPECT_COUNT": 2,
+        "FORGE_ASPECT_LOW": 1,
+        "FORGE_ASPECT_HIGH": 2,
+    }
+    # Derived Meta tables are lookups for documentation files, never enum entries.
+    assert "Enum.ForgeAspectMeta" not in data["entries"]["enum"]
+
+
+def test_zd_enum_meta_for_a_missing_enum_still_fails_loudly() -> None:
+    """ZD: XMeta is never invented without an Enum.X; the file fails with a warning."""
+    bundle = fixture_bundle()
+    del bundle.documentation["BrokenDocumentation.lua"]
+    bundle.documentation["ForgeMetaConstantsDocumentation.lua"] = _META_READING_DOC.replace(
+        "ForgeAspectMeta", "ForgeNoSuchEnumMeta"
+    )
+    data = built_data(bundle)
+    assert any(
+        warning.startswith("ForgeMetaConstantsDocumentation.lua: runtime:")
+        and "ForgeNoSuchEnumMeta" in warning
+        for warning in data["warnings"]
+    )
+
+
+def test_ze_enum_with_its_own_metatable_is_left_alone_and_warned() -> None:
+    """ZE: an Enum that already has a metatable is not touched, and the build says so."""
+    bundle = fixture_bundle()
+    del bundle.documentation["BrokenDocumentation.lua"]
+    bundle.resources["LuaEnum.lua"] = bundle.resources["LuaEnum.lua"] + "setmetatable(Enum, {})\n"
+    data = built_data(bundle)
+    assert any(
+        warning.startswith("apidocs-enum-meta.lua: Enum already has a metatable")
+        for warning in data["warnings"]
+    )
+
+
+def test_zf_resource_build_read_from_readme_equal_build() -> None:
+    """ZF: the README's build is recorded; equal builds add no warning."""
+    bundle = fetch_mirror_bundle(FakeFetcher(fixture_mirror_files()), "forever")
+    assert bundle.resource_origin == "Ketho/BlizzardInterfaceResources (forever branch)"
+    assert bundle.resource_build == "1.60.1.70888"
+    assert bundle.warnings == []
+    data = build_index(bundle, generated_at=GENERATED_AT)
+    status = ApiIndex(data).status(now=GENERATED_AT)
+    assert status["resource_build"] == "1.60.1.70888"
+    described = status["resource_lists"]
+    assert isinstance(described, str)
+    assert "GlobalAPI.lua" in described and "LuaEnum.lua" in described
+    assert "Ketho/BlizzardInterfaceResources (forever branch) at build 1.60.1.70888" in described
+    assert not any("Resource lists" in warning for warning in data["warnings"])
+
+
+def test_zh_resource_build_differing_from_documentation_is_a_warning() -> None:
+    """ZH: a resource build older than version.txt is named in a warning and the status."""
+    files = fixture_mirror_files()
+    files[_KETHO_README] = _readme("1.60.1", "70800")
+    bundle = fetch_mirror_bundle(FakeFetcher(files), "forever")
+    data = build_index(bundle, generated_at=GENERATED_AT)
+    assert data["resource_build"] == "1.60.1.70800"
+    assert any(
+        warning.startswith("Resource lists are from build 1.60.1.70800; the documentation")
+        and "1.60.1.70888" in warning
+        for warning in data["warnings"]
+    )
+    assert "the documentation is from build 1.60.1.70888" in str(data["resource_lists"])
+
+
+def test_zi_unreadable_or_unparsable_readme_means_unknown_with_a_warning() -> None:
+    """ZI: a missing README or one without GetBuildInfo() leaves the build unknown, warned."""
+    missing = fixture_mirror_files()
+    del missing[_KETHO_README]
+    bundle = fetch_mirror_bundle(FakeFetcher(missing), "forever")
+    assert bundle.resource_build is None
+    assert any("README.md could not be read" in warning for warning in bundle.warnings)
+    data = build_index(bundle, generated_at=GENERATED_AT)
+    assert data["resource_build"] is None
+    assert "their build could not be read" in str(data["resource_lists"])
+    garbled = fixture_mirror_files()
+    garbled[_KETHO_README] = "# BlizzardInterfaceResources\nno build line here\n"
+    bundle = fetch_mirror_bundle(FakeFetcher(garbled), "forever")
+    assert bundle.resource_build is None
+    assert any("has no GetBuildInfo() line" in warning for warning in bundle.warnings)
+    # A canned bundle with resources but no origin or build still says so.
+    assert "an unnamed source" in str(built_data()["resource_lists"])
+
+
+def test_zg_resource_lists_absent_for_an_export_and_an_older_index() -> None:
+    """ZG: an export has no resource lists; an index cached before T-067 reports None."""
+    bundle = load_export_bundle(FakeFileSystem(fixture_export_files()), None, "forever")
+    assert bundle is not None
+    data = build_index(bundle, generated_at=GENERATED_AT)
+    assert data["resource_lists"] is None
+    older = built_data()
+    del older["resource_lists"]
+    assert ApiIndex(older).status(now=GENERATED_AT)["resource_lists"] is None

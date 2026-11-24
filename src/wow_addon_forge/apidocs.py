@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from wow_addon_forge import luavm, tocfile
-from wow_addon_forge.env import FileSystem, detect_installs, hermes_home_dir
+from wow_addon_forge.env import FileSystem, detect_installs, hermes_home_dir, replace_file
 
 SCHEMA_VERSION = 1
 DEFAULT_FLAVOR = "forever"
@@ -71,6 +71,54 @@ APIDocumentation = {
     AddDocumentationTable = function(_, t) collector[#collector + 1] = t end,
 }
 return collector
+"""
+
+# [2026-11-24 T-066] Documentation files read companion Enum.XMeta tables that exist only
+# in the running client: LFGConstantsDocumentation.lua sets LFG_ROLE_ANY =
+# Enum.LFGRoleMeta.NumValues. MinValue and MaxValue are derived as well.
+# [2026-11-24 T-070] Measured on build 1.60.1.71091: the Gethe documentation states
+# NumValues/MinValue/MaxValue for 900 enumerations; 887 of them are in LuaEnum.lua, and
+# this derivation matches 880. It differs for CooldownViewerCategory (derived 11/-2/8,
+# documented 9/0/8) and the six Discord*ID enums (derived 0/nil/nil, documented 1/0/0);
+# no documentation file reads those seven Meta tables, so the index is unaffected.
+# Ketho's LuaEnum.lua does not write the Meta tables, so that file failed on every sync
+# and the index lost LFGRoles, LFG_ROLE_NO_ROLE and LFG_ROLE_ANY. This __index derives
+# XMeta from Enum.X on first read. It is installed after Enum is converted to Python and
+# never stores into Enum, so the derived tables never become enum entries. NumValues is
+# the count of numeric values: Ellypse's IntelliJ WoW API quirks file pins
+# Enum.LFGRoleMeta.NumValues = 3, which the three LFGRole values give.
+_ENUM_META_CHUNK = """
+local enum = Enum
+if type(enum) ~= "table" or getmetatable(enum) ~= nil then
+    return false
+end
+local derived = {}
+setmetatable(enum, {
+    __index = function(_, key)
+        if type(key) ~= "string" then
+            return nil
+        end
+        if derived[key] ~= nil then
+            return derived[key]
+        end
+        local base = string.match(key, "^(.+)Meta$")
+        local values = base and rawget(enum, base)
+        if type(values) ~= "table" then
+            return nil
+        end
+        local count, low, high = 0, nil, nil
+        for _, value in pairs(values) do
+            if type(value) == "number" then
+                count = count + 1
+                if low == nil or value < low then low = value end
+                if high == nil or value > high then high = value end
+            end
+        end
+        derived[key] = { NumValues = count, MinValue = low, MaxValue = high }
+        return derived[key]
+    end,
+})
+return true
 """
 
 
@@ -212,6 +260,11 @@ class SourceBundle:
             are added to these by ``build_index``.
         origin: The local export folder the texts were read from; ``""`` for a mirror
             bundle. Sync results quote it so the user sees which export was indexed.
+        resource_origin: [2026-11-24 T-067] Where ``resources`` came from, e.g.
+            ``"Ketho/BlizzardInterfaceResources (forever branch)"``; ``""`` when unnamed.
+        resource_build: [2026-11-24 T-071] The client build the resource lists were dumped
+            from, e.g. ``"1.60.1.70938"``, read from the resource mirror's README; None when
+            it could not be read (the reason is in ``warnings``) or there are no resources.
 
     Returns:
         Nothing; this is a data holder.
@@ -227,6 +280,8 @@ class SourceBundle:
     resources: dict[str, str]
     warnings: list[str] = field(default_factory=list)
     origin: str = ""
+    resource_origin: str = ""
+    resource_build: str | None = None
 
 
 def normalise_flavor(flavor: object) -> str:
@@ -349,6 +404,9 @@ def fetch_mirror_bundle(fetcher: Fetcher, flavor: str, *, max_workers: int = 16)
         for name in RESOURCE_FILES
     }
     resources = _fetch_many(fetcher, resource_urls, max_workers)
+    resource_build = _read_resource_build(
+        fetcher, f"{_RAW_PREFIX}Ketho/BlizzardInterfaceResources/{branch}/README.md", warnings
+    )
     return SourceBundle(
         flavor=normalised,
         build=build,
@@ -356,7 +414,49 @@ def fetch_mirror_bundle(fetcher: Fetcher, flavor: str, *, max_workers: int = 16)
         documentation=documentation,
         resources=resources,
         warnings=warnings,
+        resource_origin=f"Ketho/BlizzardInterfaceResources ({branch} branch)",
+        resource_build=resource_build,
     )
+
+
+# [2026-11-24 T-071] The resource mirror's README records the dump's client build as a
+# line `GetBuildInfo() => "1.60.1", "70938", "Nov 12 2026", 16001` (version, build number,
+# date, interface), rewritten in every build commit (checked on the forever branch,
+# 2026-11-24). Version and build number join into the dotted form version.txt uses.
+_README_BUILD = re.compile(r'GetBuildInfo\(\)\s*=>\s*"(\d+(?:\.\d+){1,3})"\s*,\s*"(\d+)"')
+
+
+def _read_resource_build(fetcher: Fetcher, url: str, warnings: list[str]) -> str | None:
+    """Read the resource lists' client build from the resource mirror's README.
+
+    Why this exists:
+        [2026-11-24 T-071] The index is labelled with the documentation build, while its
+        resource lists come from a second mirror that can lag it (70938 against 71091 on
+        2026-11-24). The build is only worth comparing if it is read, not assumed.
+
+    Args:
+        fetcher: The bundle's ``Fetcher``.
+        url: The README's raw URL.
+        warnings: The bundle's warning list; a failed read or parse appends one line.
+
+    Returns:
+        The dotted build, e.g. ``"1.60.1.70938"``, or None when the README cannot be
+        fetched or has no ``GetBuildInfo()`` line.
+
+    Failure modes:
+        None raised: the README only labels the lists, so failing to read it must not fail
+        a sync whose data fetched fine. Each failure is a warning instead.
+    """
+    try:
+        text = fetcher.fetch_text(url)
+    except ApiIndexError as exc:
+        warnings.append(f"Resource lists' build is unknown: README.md could not be read ({exc}).")
+        return None
+    match = _README_BUILD.search(text)
+    if match is None:
+        warnings.append("Resource lists' build is unknown: README.md has no GetBuildInfo() line.")
+        return None
+    return f"{match.group(1)}.{match.group(2)}"
 
 
 # [2026-11-11 T-044] A client export is the tree `ExportInterfaceFiles code` writes
@@ -1014,7 +1114,55 @@ def _run_lua_enum(runtime: Any, bundle: SourceBundle, warnings: list[str]) -> tu
     except ValueError as exc:
         warnings.append(f"LuaEnum.lua: {exc}")
         return None, None
+    # [2026-11-24 T-066] Only after the conversion above: see _ENUM_META_CHUNK.
+    try:
+        installed = luavm.run_chunk_value(runtime, _ENUM_META_CHUNK, "apidocs-enum-meta.lua")
+    except luavm.LuaChunkError as exc:
+        warnings.append(f"apidocs-enum-meta.lua: {exc.phase}: {exc.message}")
+    else:
+        if installed is not True:
+            warnings.append(
+                "apidocs-enum-meta.lua: Enum already has a metatable; Enum.*Meta tables "
+                "are not derived, so documentation files that read them may fail."
+            )
     return enum_global, constants_global
+
+
+def describe_resource_lists(bundle: SourceBundle) -> str | None:
+    """Say where an index's resource lists came from and which build they are.
+
+    Why this exists:
+        [2026-11-24 T-067] An index is labelled with the documentation build
+        (``version.txt`` on the Gethe mirror), but its global API, event, enum, FrameXML,
+        widget, template and mixin lists come from Ketho/BlizzardInterfaceResources, which
+        can lag it. [2026-11-24 T-071] Their build is now read from that mirror's README
+        (``bundle.resource_build``); T-067 had wrongly said no fetched file carried it.
+
+    Args:
+        bundle: The bundle the index is built from.
+
+    Returns:
+        One sentence naming the resource files, their origin and their build (or saying the
+        build is unknown), or None when the bundle has no resource lists (a client export).
+
+    Failure modes:
+        None.
+    """
+    if not bundle.resources:
+        return None
+    origin = bundle.resource_origin or "an unnamed source"
+    files = ", ".join(sorted(bundle.resources))
+    if bundle.resource_build is None:
+        return (
+            f"{files} came from {origin}; their build could not be read, so they may be "
+            f"from a different build than {bundle.build}."
+        )
+    if bundle.resource_build == bundle.build:
+        return f"{files} came from {origin} at build {bundle.resource_build}, the same build."
+    return (
+        f"{files} came from {origin} at build {bundle.resource_build}; the documentation "
+        f"is from build {bundle.build}."
+    )
 
 
 def build_index(bundle: SourceBundle, *, generated_at: float) -> dict[str, Any]:
@@ -1044,6 +1192,18 @@ def build_index(bundle: SourceBundle, *, generated_at: float) -> dict[str, Any]:
         documented entries.
     """
     warnings: list[str] = list(bundle.warnings)
+    # [2026-11-24 T-071] Two mirrors, two builds: say so when they differ, because a name
+    # added or removed between them is then missing from, or stale in, the resource lists.
+    if (
+        bundle.resources
+        and bundle.resource_build is not None
+        and bundle.resource_build != bundle.build
+    ):
+        warnings.append(
+            f"Resource lists are from build {bundle.resource_build}; the documentation is "
+            f"from build {bundle.build}. Undocumented names added or removed between the two "
+            "builds may be missing or stale."
+        )
     entries: dict[str, dict[str, dict[str, Any]]] = {kind: {} for kind in KINDS}
     widgets: dict[str, Any] = {}
     runtime = luavm.new_runtime()
@@ -1089,6 +1249,8 @@ def build_index(bundle: SourceBundle, *, generated_at: float) -> dict[str, Any]:
         "source": bundle.source,
         "generated_at": float(generated_at),
         "documentation_files": len(bundle.documentation),
+        "resource_lists": describe_resource_lists(bundle),
+        "resource_build": bundle.resource_build if bundle.resources else None,
         "counts": {kind: len(entries[kind]) for kind in KINDS},
         "warnings": warnings,
         "widgets": widgets,
@@ -1174,7 +1336,10 @@ class ApiIndex:
         Returns:
             A dict with ``flavor``, ``build``, ``source``, ``schema``, ``generated_at``,
             ``generated_at_utc`` (ISO 8601 UTC, seconds, ending ``"Z"``), ``age_seconds``
-            (never negative), ``documentation_files``, ``counts``, ``warning_count``,
+            (never negative), ``documentation_files``, ``resource_lists`` (see
+            ``describe_resource_lists``; None for an export or an index built before
+            T-067), ``resource_build`` (T-071; None when unknown, for an export, or an index
+            built before T-071), ``counts``, ``warning_count``,
             ``warnings`` (first 20) and ``warnings_truncated``.
 
         Failure modes:
@@ -1208,6 +1373,8 @@ class ApiIndex:
             .replace("+00:00", "Z"),
             "age_seconds": max(0, int(now - generated)),
             "documentation_files": self._data.get("documentation_files"),
+            "resource_lists": self._data.get("resource_lists"),
+            "resource_build": self._data.get("resource_build"),
             "counts": counts,
             "warning_count": len(all_warnings),
             "warnings": all_warnings[:20],
@@ -1384,7 +1551,7 @@ def _atomic_write_text(path: Path, text: str) -> None:
         # [2026-11-11 T-005] Write-then-replace in the same directory: a crash mid-write can
         # only leave the old index or the whole new one, never a half-written file a later
         # read would mistake for a corrupt sync.
-        os.replace(temp_path, path)
+        replace_file(temp_path, path)
     except BaseException:
         temp_path.unlink(missing_ok=True)
         raise
